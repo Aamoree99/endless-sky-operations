@@ -36,7 +36,7 @@ jobs:
         run: npm ci
 
       - name: Build distributables
-        run: npm run dist
+        run: npm run dist -- --publish never
 
       - name: Collect release assets
         shell: bash
