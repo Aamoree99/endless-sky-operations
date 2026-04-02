@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Endless Sky Operations</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="eyebrow">Endless Sky</div>
+          <h1 id="page-title">Planner</h1>
+          <p id="page-subtitle" class="subhead">
+            Trade planning, fleet state, and ship fitting for the active commander.
+          </p>
+        </div>
+        <div id="hero-meta" class="hero-meta"></div>
+      </header>
+
+      <nav class="tabs" aria-label="Primary">
+        <button class="tab-button is-active" data-page-target="planner" type="button">
+          Planner
+        </button>
+        <button class="tab-button" data-page-target="atlas" type="button">
+          Map
+        </button>
+        <button class="tab-button" data-page-target="wiki" type="button">
+          Wiki
+        </button>
+        <button class="tab-button" data-page-target="settings" type="button">
+          Settings
+        </button>
+        <button class="tab-button" data-page-target="debug" type="button" hidden>
+          Debug
+        </button>
+        <button class="tab-button" data-page-target="fleet" type="button">
+          Fleet
+        </button>
+        <button class="tab-button" data-page-target="fitter" type="button">
+          Fitter
+        </button>
+      </nav>
+
+      <section id="summary-strip" class="summary-strip"></section>
+      <section id="save-setup-banner" class="save-setup-banner" hidden></section>
+
+      <section id="page-planner" class="page is-active">
+        <div class="planner-layout">
+          <div class="planner-main">
+            <div id="active-route-card" class="active-route-card"></div>
+
+            <div class="planner-route-grid">
+              <section class="panel panel-tight">
+                <div class="panel-head">
+                  <div>
+                    <h2>Direct markets</h2>
+                    <p>Best current price deltas from the system you are in.</p>
+                  </div>
+                </div>
+                <div id="direct-markets" class="route-list"></div>
+              </section>
+
+              <section class="panel panel-tight">
+                <div class="panel-head">
+                  <div>
+                    <h2>Loops from here</h2>
+                    <p>Round trips that start from the current system.</p>
+                  </div>
+                </div>
+                <div id="local-loops" class="route-list"></div>
+              </section>
+
+              <section class="panel panel-tight" hidden>
+                <div class="panel-head">
+                  <div>
+                    <h2>Reachable loops</h2>
+                    <p>Higher-yield loops inside flagship jump range.</p>
+                  </div>
+                </div>
+                <div id="reachable-loops" class="route-list"></div>
+              </section>
+            </div>
+
+            <section class="panel panel-tight planner-tracker-panel" hidden>
+              <div class="tracker-head">
+                <div>
+                  <h2>Loop tracker</h2>
+                  <p>Run one active round trip at a time.</p>
+                </div>
+                <button id="clear-tracker" class="button-secondary" type="button">
+                  Reset
+                </button>
+              </div>
+              <div id="tracker" class="tracker-box"></div>
+            </section>
+          </div>
+
+          <aside class="planner-map-rail">
+            <section class="panel map-panel panel-tight">
+              <div class="panel-head">
+                <div>
+                  <h2>Route map</h2>
+                  <p>Focused route space with a compact galaxy overview.</p>
+                </div>
+              </div>
+              <div class="map-stage">
+                <div class="map-block map-block-primary map-block-overlay">
+                  <div id="selected-route-meta" class="route-focus muted">
+                    Current jump neighborhood.
+                  </div>
+                  <div class="map-wrap map-wrap-primary">
+                    <svg id="map-svg" viewBox="0 0 1000 760" aria-label="Route map"></svg>
+                  </div>
+                  <aside class="map-overview">
+                    <div class="route-focus muted">Galaxy overview</div>
+                    <div class="map-wrap map-wrap-mini">
+                      <svg id="galaxy-map-svg" viewBox="0 0 360 360" aria-label="Galaxy overview map"></svg>
+                    </div>
+                  </aside>
+                </div>
+              </div>
+            </section>
+          </aside>
+        </div>
+      </section>
+
+      <section id="page-atlas" class="page">
+        <div class="atlas-layout">
+          <aside class="panel panel-tight atlas-side">
+            <div class="panel-head">
+              <div>
+                <h2>Systems</h2>
+                <p>Browse systems, planets, and currently available services.</p>
+              </div>
+            </div>
+            <label class="field">
+              <span>Search systems or planets</span>
+              <input id="atlas-search" type="search" placeholder="Imo Dep, Wah Oh, Geminus…" />
+            </label>
+            <div id="atlas-system-list" class="atlas-system-list"></div>
+          </aside>
+
+          <section class="panel atlas-main">
+            <div class="panel-head">
+              <div>
+                <h2>Map</h2>
+                <p>Current prices, shipyards, outfitters, and active local stock.</p>
+              </div>
+            </div>
+            <div class="atlas-map-wrap">
+              <svg id="atlas-map-svg" viewBox="0 0 1200 780" aria-label="Atlas map"></svg>
+              <div id="atlas-map-planet" class="atlas-map-planet"></div>
+              <div id="atlas-map-market" class="atlas-map-market"></div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="page-wiki" class="page">
+        <div class="wiki-layout">
+          <aside class="panel panel-tight wiki-side">
+            <div class="panel-head">
+              <div>
+                <h2>Chapters</h2>
+                <p>Only systems, worlds, ships, outfits, and lore already opened in this save.</p>
+              </div>
+            </div>
+            <div id="wiki-nav" class="wiki-nav"></div>
+          </aside>
+
+          <section class="panel panel-tight wiki-main">
+            <div class="panel-head">
+              <div>
+                <h2>Wiki</h2>
+                <p>Live field manual built from the active save and local game data.</p>
+              </div>
+            </div>
+            <div id="wiki-content" class="wiki-content"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="page-settings" class="page">
+        <div class="settings-layout">
+          <section class="panel panel-tight settings-overview">
+            <div class="panel-head">
+              <div>
+                <h2>Application</h2>
+                <p>Desktop-friendly configuration for save discovery and local game data.</p>
+              </div>
+            </div>
+            <div id="settings-overview" class="settings-grid"></div>
+          </section>
+
+          <section class="panel panel-tight settings-section">
+            <div class="panel-head">
+              <div>
+                <h2>Save discovery</h2>
+                <p>Choose which <code>recent.txt</code> the app should use when automatic detection is wrong.</p>
+              </div>
+            </div>
+            <div id="settings-save" class="settings-grid"></div>
+          </section>
+
+          <section class="panel panel-tight settings-section">
+            <div class="panel-head">
+              <div>
+                <h2>Game data</h2>
+                <p>Set the Endless Sky installation folder if the game files are not detected automatically.</p>
+              </div>
+            </div>
+            <div id="settings-game" class="settings-grid"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="page-debug" class="page">
+        <div class="debug-layout">
+          <section class="panel panel-tight debug-header-panel">
+            <div class="panel-head">
+              <div>
+                <h2>Save editor</h2>
+                <p>Direct changes for the current save file with safety levels and backup controls.</p>
+              </div>
+            </div>
+            <div id="debug-editor-warning" class="debug-warning-box"></div>
+            <div id="debug-editor-settings" class="debug-settings"></div>
+            <div id="debug-editor-status" class="debug-status-box" hidden></div>
+          </section>
+
+          <div class="debug-editor-grid">
+            <section class="panel panel-tight">
+              <div class="panel-head">
+                <div>
+                  <h2>Safe</h2>
+                  <p>Simple account edits with low risk.</p>
+                </div>
+              </div>
+              <div id="debug-safe-editor" class="debug-editor-section"></div>
+            </section>
+
+            <section class="panel panel-tight">
+              <div class="panel-head">
+                <div>
+                  <h2>Advanced</h2>
+                  <p>Faction, license, and progression data.</p>
+                </div>
+              </div>
+              <div id="debug-advanced-editor" class="debug-editor-section"></div>
+            </section>
+
+            <section class="panel panel-tight">
+              <div class="panel-head">
+                <div>
+                  <h2>Dangerous</h2>
+                  <p>Ship state edits. Backups are strongly recommended.</p>
+                </div>
+              </div>
+              <div id="debug-dangerous-editor" class="debug-editor-section"></div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section id="page-fleet" class="page">
+        <div class="fleet-layout">
+          <section class="panel panel-tight">
+            <div class="panel-head">
+              <div>
+                <h2>Mission occupancy</h2>
+                <p>Cargo and bunks reserved by accepted jobs.</p>
+              </div>
+            </div>
+            <div id="mission-occupancy" class="mission-occupancy"></div>
+          </section>
+
+          <section class="panel panel-tight">
+            <div class="panel-head">
+              <div>
+                <h2>Cargo ledger</h2>
+                <p>Current cargo, basis, local sale price, and margin.</p>
+              </div>
+            </div>
+            <div id="cargo-summary" class="table-wrap"></div>
+          </section>
+
+          <section class="panel panel-tight">
+            <div class="panel-head">
+              <div>
+                <h2>Fleet roster</h2>
+                <p>Active and parked ships from the current commander.</p>
+              </div>
+            </div>
+            <div id="fleet-list" class="fleet-grid"></div>
+          </section>
+
+          <div class="fleet-side-by-side">
+            <section class="panel panel-tight">
+              <div class="panel-head">
+                <div>
+                <h2>Standings</h2>
+                <p>Major faction standings from the active save.</p>
+              </div>
+            </div>
+              <div id="standings" class="table-wrap"></div>
+            </section>
+
+            <section class="panel panel-tight">
+              <div class="panel-head">
+                <div>
+                <h2>Licenses</h2>
+                <p>Owned licenses and what still needs unlocking.</p>
+              </div>
+            </div>
+              <div id="licenses" class="license-list"></div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section id="page-fitter" class="page">
+        <div class="fitter-page">
+          <section class="panel panel-tight fitter-left-panel">
+            <div class="fit-browser-tabs">
+              <button class="fit-browser-tab is-active" id="fit-browser-tab-ships" data-fit-browser-tab="ships" type="button">
+                Ships
+              </button>
+              <button class="fit-browser-tab" id="fit-browser-tab-fits" data-fit-browser-tab="fits" type="button">
+                Fits
+              </button>
+              <button class="fit-browser-tab" id="fit-browser-tab-modules" data-fit-browser-tab="modules" type="button">
+                Modules
+              </button>
+            </div>
+
+            <section id="fitter-browser-pane" class="fitter-pane is-active">
+              <div class="fit-toolbar fit-toolbar-browser">
+                <label class="field field-grow">
+                  <span>Find ship or fit</span>
+                  <input id="fit-browser-search" type="search" placeholder="Geocoris, Shield Beetle, convoy…" />
+                </label>
+                <label class="field" id="fit-ship-category-field">
+                  <span>Class</span>
+                  <div class="select-shell">
+                    <select id="fit-ship-category">
+                      <option value="all">All</option>
+                    </select>
+                  </div>
+                </label>
+              </div>
+              <div id="fit-browser-list" class="fit-browser-list"></div>
+            </section>
+
+            <section id="fitter-modules-pane" class="fitter-pane">
+              <div class="panel-head fitter-catalog-head">
+                <div>
+                  <h2>Outfit catalog</h2>
+                  <p>Modules available on your current progression and valid for the selected ship.</p>
+                </div>
+              </div>
+              <div class="fit-toolbar">
+                <label class="field field-grow">
+                  <span>Search outfits</span>
+                  <input
+                    id="outfit-search"
+                    type="search"
+                    placeholder="Heavy Laser, Geode Reactor, Bullfrog…"
+                  />
+                </label>
+
+                <label class="field">
+                  <span>Category</span>
+                  <div class="select-shell">
+                    <select id="outfit-category">
+                      <option value="all">All</option>
+                      <option value="Guns">Guns</option>
+                      <option value="Turrets">Turrets</option>
+                      <option value="Secondary Weapons">Secondary Weapons</option>
+                      <option value="Ammunition">Ammunition</option>
+                      <option value="Engines">Engines</option>
+                      <option value="Power">Power</option>
+                      <option value="Systems">Systems</option>
+                      <option value="Hand to Hand">Hand to Hand</option>
+                      <option value="Special">Special</option>
+                    </select>
+                  </div>
+                </label>
+
+                <button id="save-fit-button" class="button-primary" type="button">
+                  Save fit
+                </button>
+              </div>
+              <div id="outfit-catalog" class="outfit-catalog"></div>
+            </section>
+          </section>
+
+          <aside class="panel panel-tight fitter-right-panel">
+            <div id="fit-selection" class="fit-selection"></div>
+            <div class="fitter-right-scroll">
+              <section class="fit-owned-block fit-owned-block-compact">
+                <div class="panel-head panel-head-compact">
+                  <div>
+                    <h2>Fleet ships</h2>
+                    <p>Quick open from the current save.</p>
+                  </div>
+                </div>
+                <div id="fit-owned-ships-compact" class="fit-owned-ships"></div>
+              </section>
+              <div id="fit-header" class="fit-header"></div>
+              <div id="fit-summary" class="fit-summary-sheet"></div>
+              <section class="fitter-loadout-block">
+                <div class="panel-head panel-head-compact">
+                  <div>
+                    <h2>Installed outfits</h2>
+                    <p>Current loadout grouped the same way as the outfitter.</p>
+                  </div>
+                </div>
+                <div id="fit-loadout" class="fit-loadout"></div>
+              </section>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </main>
+
+    <div id="fit-save-modal" class="modal-shell" hidden>
+      <div class="modal-backdrop" data-modal-close="fit-save"></div>
+      <div class="modal-card">
+        <div class="panel-head panel-head-compact">
+          <div>
+            <h2>Save fit</h2>
+            <p>Name the fit and add a short note for the preview card.</p>
+          </div>
+        </div>
+        <div class="modal-body">
+          <label class="field">
+            <span>Fit name</span>
+            <input id="fit-save-name" type="text" maxlength="48" placeholder="Convoy escort, Raider, Brick…" />
+          </label>
+          <label class="field">
+            <span>Short note</span>
+            <textarea id="fit-save-note" class="modal-textarea" maxlength="280" placeholder="Notes about this fit…"></textarea>
+          </label>
+          <div class="modal-charcount" id="fit-save-charcount">0 / 280</div>
+        </div>
+        <div class="modal-actions">
+          <button id="fit-save-cancel" class="button-secondary" type="button">Cancel</button>
+          <button id="fit-save-submit" class="button-primary" type="button">Save fit</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="debug-warning-modal" class="modal-shell" hidden>
+      <div class="modal-backdrop" data-modal-close="debug-warning"></div>
+      <div class="modal-card">
+        <div class="panel-head panel-head-compact">
+          <div>
+            <h2>Enable debug mode</h2>
+            <p>Debug mode exposes hidden data and enables direct save editing.</p>
+          </div>
+        </div>
+        <div class="modal-body">
+          <p class="modal-copy">
+            Use it only when you want full data visibility and direct save control.
+          </p>
+          <p class="modal-copy modal-copy-warning">
+            Close Endless Sky before applying edits. If the game is still open, your changes may be overwritten or fail to persist.
+          </p>
+        </div>
+        <div class="modal-actions">
+          <button id="debug-warning-cancel" class="button-secondary" type="button">Cancel</button>
+          <button id="debug-warning-confirm" class="button-primary" type="button">Enter debug</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="save-path-modal" class="modal-shell" hidden>
+      <div class="modal-backdrop" data-modal-close="save-path"></div>
+      <div class="modal-card">
+        <div class="panel-head panel-head-compact">
+          <div>
+            <h2 id="save-path-title">Set recent.txt path</h2>
+            <p id="save-path-copy">Choose Endless Sky recent.txt if automatic save detection does not match this machine.</p>
+          </div>
+        </div>
+        <div class="modal-body">
+          <label class="field">
+            <span id="save-path-label">recent.txt</span>
+            <input id="save-path-input" type="text" placeholder="/path/to/recent.txt" />
+          </label>
+          <div id="save-path-hints" class="save-path-hints"></div>
+          <div id="save-path-status" class="modal-copy muted save-path-status"></div>
+        </div>
+        <div class="modal-actions">
+          <button id="save-path-clear" class="button-inline" type="button">Clear override</button>
+          <button id="save-path-browse" class="button-secondary" type="button">Browse…</button>
+          <button id="save-path-cancel" class="button-secondary" type="button">Cancel</button>
+          <button id="save-path-submit" class="button-primary" type="button">Use path</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
