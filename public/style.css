@@ -1772,6 +1772,8 @@ h1 {
   height: 100%;
   cursor: grab;
   touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 #atlas-map-svg:active {
@@ -1966,6 +1968,8 @@ h1 {
   stroke-width: 3px;
   stroke-linejoin: round;
   cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .atlas-map-label.is-current {
@@ -5316,6 +5320,17 @@ body {
   white-space: nowrap;
 }
 
+.atlas-market-value {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.atlas-market-value.is-price {
+  color: rgba(233, 239, 234, 0.9) !important;
+}
+
 .atlas-market-delta.is-up {
   color: rgba(151, 210, 175, 1) !important;
 }
@@ -5562,11 +5577,13 @@ body {
 .map-link {
   stroke: rgba(126, 149, 132, 0.34) !important;
   stroke-width: 1.35 !important;
+  vector-effect: non-scaling-stroke !important;
 }
 
 .mini-link {
   stroke: rgba(126, 149, 132, 0.3) !important;
   stroke-width: 1.35 !important;
+  vector-effect: non-scaling-stroke !important;
 }
 
 .map-link-wormhole,
@@ -5574,23 +5591,27 @@ body {
   stroke: rgba(240, 199, 90, 0.68) !important;
   stroke-width: 1.45 !important;
   stroke-dasharray: 7 7 !important;
+  vector-effect: non-scaling-stroke !important;
 }
 
 .map-path-dashed,
 .mini-path-dashed {
   stroke: rgba(180, 190, 180, 0.62) !important;
   stroke-width: 2.1 !important;
+  vector-effect: non-scaling-stroke !important;
 }
 
 .map-path-outbound,
 .mini-path-outbound {
   stroke: rgba(148, 210, 163, 0.92) !important;
+  vector-effect: non-scaling-stroke !important;
 }
 
 .map-path-return,
 .mini-path-return {
   stroke: rgba(240, 199, 90, 0.95) !important;
   fill: none !important;
+  vector-effect: non-scaling-stroke !important;
 }
 
 .map-node,
@@ -5677,16 +5698,21 @@ body {
   max-height: calc(100vh - 140px) !important;
 }
 
+#atlas-map-svg,
+#atlas-map-overlay-svg {
+  clip-path: inset(5% 5% 5% 5%) !important;
+}
+
 .atlas-map-planet,
 .atlas-map-market {
   position: absolute !important;
   display: grid !important;
   z-index: 1000 !important;
   background:
-    linear-gradient(180deg, rgba(24, 29, 25, 0.94), rgba(15, 19, 16, 0.96)) !important;
+    linear-gradient(180deg, rgba(19, 23, 20, 0.985), rgba(12, 15, 13, 0.992)) !important;
   border: 1px solid rgba(188, 205, 192, 0.12) !important;
   box-shadow: 0 18px 34px rgba(0, 0, 0, 0.26) !important;
-  backdrop-filter: blur(8px) !important;
+  backdrop-filter: blur(2px) !important;
 }
 
 .atlas-map-planet {
@@ -5735,9 +5761,67 @@ body {
 
 .atlas-map-label.is-unknown {
   fill: rgba(200, 210, 220, 0.38) !important;
-  font-size: 10px !important;
-  font-weight: 400 !important;
-  stroke-width: 1.5px !important;
+  font-weight: 500 !important;
+}
+
+#atlas-map-svg,
+#atlas-map-overlay-svg {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+#atlas-map-svg {
+  z-index: 1 !important;
+}
+
+#atlas-map-overlay-svg {
+  z-index: 2 !important;
+  overflow: visible !important;
+}
+
+#atlas-map-overlay-svg .atlas-node-hit,
+#atlas-map-overlay-svg .atlas-node,
+#atlas-map-overlay-svg .atlas-map-label,
+#atlas-map-overlay-svg .atlas-map-overlay-node {
+  pointer-events: all !important;
+}
+
+#atlas-map-overlay-svg .atlas-map-label {
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  stroke-width: 2px !important;
+}
+
+html,
+body {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(226, 193, 104, 0.72) rgba(15, 19, 16, 0.92);
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+html::-webkit-scrollbar-track,
+body::-webkit-scrollbar-track {
+  background: linear-gradient(180deg, rgba(12, 15, 13, 0.98), rgba(16, 20, 17, 0.98));
+  border-left: 1px solid rgba(188, 205, 192, 0.08);
+}
+
+html::-webkit-scrollbar-thumb,
+body::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(240, 199, 90, 0.88), rgba(176, 151, 72, 0.88));
+  border: 2px solid rgba(15, 19, 16, 0.98);
+  min-height: 42px;
+}
+
+html::-webkit-scrollbar-thumb:hover,
+body::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(247, 214, 118, 0.95), rgba(196, 169, 78, 0.95));
 }
 
 

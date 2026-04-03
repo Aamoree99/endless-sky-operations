@@ -2,6 +2,8 @@
 
 [Download the latest build](https://github.com/Aamoree99/endless-sky-operations/releases/latest)
 
+[Release notes](https://github.com/Aamoree99/endless-sky-operations/blob/main/CHANGELOG.md)
+
 Local desktop companion for **Endless Sky**.
 
 It reads your installed game data and your current save, then gives you:

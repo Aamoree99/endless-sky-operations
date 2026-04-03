@@ -1,3 +1,27 @@
+import {
+  clamp,
+  lerp,
+  easeOutCubic,
+  fitViewBox,
+  getAtlasMapProjection,
+  clampAtlasView,
+  getDefaultAtlasView,
+  getAtlasFocusViewForNames,
+} from "./app/map-view.js";
+import { firstCopyLine, clampCopy, uniqueByName } from "./app/text-utils.js";
+import {
+  createTrackerState,
+  normalizeTrackerState,
+  getTrackerTravelPlan,
+  getTrackerStageMeta,
+} from "./app/tracker-state.js";
+import {
+  formatTradeLocation,
+  getRouteAccessLabel,
+  getRouteRiskBadges,
+} from "./app/planner-text.js";
+import { humanizeMissionSummary, humanizeWorldStateNotes } from "./app/wiki-text.js";
+
 const heroMeta = document.getElementById("hero-meta");
 const pageTitle = document.getElementById("page-title");
 const pageSubtitle = document.getElementById("page-subtitle");
@@ -13,6 +37,7 @@ const activeRouteCard = document.getElementById("active-route-card");
 const atlasSearch = document.getElementById("atlas-search");
 const atlasSystemList = document.getElementById("atlas-system-list");
 const atlasMapSvg = document.getElementById("atlas-map-svg");
+const atlasMapOverlaySvg = document.getElementById("atlas-map-overlay-svg");
 const atlasMapPlanet = document.getElementById("atlas-map-planet");
 const atlasMapStock = document.getElementById("atlas-map-stock");
 const atlasMapMarket = document.getElementById("atlas-map-market");
@@ -22,6 +47,7 @@ const wikiContent = document.getElementById("wiki-content");
 const settingsOverview = document.getElementById("settings-overview");
 const settingsSave = document.getElementById("settings-save");
 const settingsGame = document.getElementById("settings-game");
+const settingsPlanner = document.getElementById("settings-planner");
 const debugEditorWarning = document.getElementById("debug-editor-warning");
 const debugEditorSettings = document.getElementById("debug-editor-settings");
 const debugEditorStatus = document.getElementById("debug-editor-status");
@@ -155,6 +181,8 @@ const state = {
   atlasMapAnimationFrame: null,
   atlasMapProjectionKey: null,
   atlasPendingFocus: null,
+  atlasAllBounds: null,
+  atlasMapVisualEntries: [],
   activePage: "planner",
   debugMode: false,
   showAllStandings: false,
@@ -327,6 +355,10 @@ function getSaveInfo() {
 
 function getGameInfo() {
   return state.status?.game || state.bootstrap?.game || null;
+}
+
+function getPlannerSettings() {
+  return state.status?.market?.plannerSettings || state.bootstrap?.config || null;
 }
 
 function hasActiveSave() {
@@ -1550,8 +1582,12 @@ function filterPlannerRoutesForMode(routes = []) {
 function splitRoutesByAccess(routes = []) {
   const visibleRoutes = filterPlannerRoutesForMode(routes);
   return {
-    safe: visibleRoutes.filter(isRouteAccessible),
-    risky: visibleRoutes.filter((route) => !isRouteAccessible(route)),
+    safe: visibleRoutes.filter((route) =>
+      ["open", "gated", "unfriendly"].includes(route?.access?.status || "open")
+    ),
+    risky: visibleRoutes.filter((route) =>
+      ["blocked", "unknown"].includes(route?.access?.status || "open")
+    ),
     hiddenInLive: Math.max(0, routes.length - visibleRoutes.length),
   };
 }
@@ -1607,6 +1643,11 @@ function setPage(page) {
   renderPrimaryTabs();
   for (const button of tabButtons) {
     button.classList.toggle("is-active", button.dataset.pageTarget === state.activePage);
+  }
+  if (state.activePage === "atlas") {
+    requestAnimationFrame(() => renderAtlas());
+  } else if (state.activePage === "planner") {
+    requestAnimationFrame(() => renderMap());
   }
 }
 
@@ -2460,44 +2501,6 @@ function getGlobalProjection(anchorNames = []) {
   };
 }
 
-function fitViewBox(minX, minY, maxX, maxY, targetWidth, targetHeight, boundsWidth, boundsHeight) {
-  const spanX = Math.max(1, maxX - minX);
-  const spanY = Math.max(1, maxY - minY);
-  const span = Math.max(spanX, spanY);
-  const padding = Math.max(28, Math.min(72, span * 0.18));
-  let left = minX - padding;
-  let top = minY - padding;
-  let width = Math.max(120, spanX + padding * 2);
-  let height = Math.max(120, spanY + padding * 2);
-  const targetRatio = targetWidth / targetHeight;
-  const currentRatio = width / height;
-
-  if (currentRatio > targetRatio) {
-    const neededHeight = width / targetRatio;
-    top -= (neededHeight - height) / 2;
-    height = neededHeight;
-  } else {
-    const neededWidth = height * targetRatio;
-    left -= (neededWidth - width) / 2;
-    width = neededWidth;
-  }
-
-  if (left < 0) {
-    left = 0;
-  }
-  if (top < 0) {
-    top = 0;
-  }
-  if (left + width > boundsWidth) {
-    left = Math.max(0, boundsWidth - width);
-  }
-  if (top + height > boundsHeight) {
-    top = Math.max(0, boundsHeight - height);
-  }
-
-  return { x: left, y: top, width, height };
-}
-
 function expandFocus(seedNames, depth = 1) {
   const systems = getSystemsMap();
   const expanded = new Set(seedNames);
@@ -2625,22 +2628,6 @@ function getTrackerState() {
   }
 }
 
-function getTrackerTravelPlan(trackerState) {
-  if (!trackerState) {
-    return [];
-  }
-  if (trackerState.stage === "positioning") {
-    return trackerState.origin ? [trackerState.origin] : [];
-  }
-  if (trackerState.stage === "outbound-ready" || trackerState.stage === "outbound") {
-    return trackerState.destination ? [trackerState.destination] : [];
-  }
-  if (trackerState.stage === "return-ready" || trackerState.stage === "return") {
-    return trackerState.origin ? [trackerState.origin] : [];
-  }
-  return [];
-}
-
 async function syncTrackerTravelPlan(trackerState) {
   const desired = getTrackerTravelPlan(trackerState);
   const current = state.status?.player?.travelPlan || [];
@@ -2696,28 +2683,7 @@ function clearTracker() {
 function startTrackingLoop(route) {
   const currentSystem = state.status?.player?.currentSystem;
   const cargoRows = state.status?.market?.cargoSummary || [];
-  const outwardLoaded = cargoRows.some(
-    (row) => row.commodity === route.outward.commodity && Number(row.tons) > 0
-  );
-  const inboundLoaded = cargoRows.some(
-    (row) => row.commodity === route.inbound.commodity && Number(row.tons) > 0
-  );
-  setTrackerState({
-    origin: route.origin,
-    destination: route.destination,
-    outwardCommodity: route.outward.commodity,
-    inboundCommodity: route.inbound.commodity,
-    stage:
-      currentSystem === route.origin
-        ? outwardLoaded
-          ? "outbound"
-          : "outbound-ready"
-        : currentSystem === route.destination && inboundLoaded
-          ? "return"
-          : "positioning",
-    laps: 0,
-    startedAt: new Date().toISOString(),
-  });
+  setTrackerState(createTrackerState(route, currentSystem, cargoRows, new Date().toISOString()));
 }
 
 function updateTrackerFromStatus() {
@@ -2727,42 +2693,9 @@ function updateTrackerFromStatus() {
   if (!trackerState || !currentSystem) {
     return;
   }
-  const outwardLoaded = cargoRows.some(
-    (row) => row.commodity === trackerState.outwardCommodity && Number(row.tons) > 0
-  );
-  const inboundLoaded = cargoRows.some(
-    (row) => row.commodity === trackerState.inboundCommodity && Number(row.tons) > 0
-  );
-
-  if (trackerState.stage === "positioning" && currentSystem === trackerState.origin) {
-    setTrackerState({ ...trackerState, stage: outwardLoaded ? "outbound" : "outbound-ready" });
-    return;
-  }
-  if (trackerState.stage === "outbound-ready" && currentSystem === trackerState.origin && outwardLoaded) {
-    setTrackerState({ ...trackerState, stage: "outbound" });
-    return;
-  }
-  if (trackerState.stage === "outbound" && currentSystem === trackerState.destination) {
-    setTrackerState({ ...trackerState, stage: inboundLoaded ? "return" : "return-ready" });
-    return;
-  }
-  if (trackerState.stage === "return-ready" && currentSystem === trackerState.destination && inboundLoaded) {
-    setTrackerState({ ...trackerState, stage: "return" });
-    return;
-  }
-  if (trackerState.stage === "return" && currentSystem === trackerState.origin) {
-    setTrackerState({
-      ...trackerState,
-      stage: "completed",
-      laps: (trackerState.laps || 0) + 1,
-    });
-    return;
-  }
-  if (trackerState.stage === "completed" && currentSystem === trackerState.origin) {
-    setTrackerState({
-      ...trackerState,
-      stage: outwardLoaded ? "outbound" : "outbound-ready",
-    });
+  const next = normalizeTrackerState(trackerState, currentSystem, cargoRows);
+  if (JSON.stringify(next) !== JSON.stringify(trackerState)) {
+    setTrackerState(next);
   }
 }
 
@@ -2967,21 +2900,6 @@ function routeMeta(bits) {
   return `<div class="meta-row">${bits.map((bit) => `<span>${bit}</span>`).join("")}</div>`;
 }
 
-function getRouteAccessLabel(access) {
-  switch (access?.status) {
-    case "blocked":
-      return "Landing blocked";
-    case "unfriendly":
-      return "Low reputation";
-    case "gated":
-      return "Access gate";
-    case "unknown":
-      return "Unknown access";
-    default:
-      return "Landing open";
-  }
-}
-
 function renderRouteAccess(access) {
   if (!access || access.status === "open") {
     return "";
@@ -2992,6 +2910,14 @@ function renderRouteAccess(access) {
       <span>${escapeHtml(access.alert || "")}</span>
     </div>
   `;
+}
+
+function renderRouteRiskTags(route) {
+  const tags = getRouteRiskBadges(route, getPlannerSettings()).map(
+    (badge) => `<span class="tag is-${escapeHtml(badge.tone)}">${escapeHtml(badge.label)}</span>`
+  );
+
+  return tags.length ? `<div class="tag-row">${tags.join("")}</div>` : "";
 }
 
 function renderCarrySales() {
@@ -3051,7 +2977,7 @@ function renderDirectMarkets() {
   const focused = getPreferredRouteContext();
   const activeRouteKey = focused ? makeRouteKey(focused.group, focused.route) : null;
   if (!safe.length) {
-    directMarkets.innerHTML = `<div class="empty-state">${risky.length ? `${formatNumber(risky.length)} routes were hidden because landing is blocked or not verified.` : "No profitable system-to-system price delta was found inside the current jump envelope."}</div>`;
+    directMarkets.innerHTML = `<div class="empty-state">${risky.length ? `${formatNumber(risky.length)} routes were hidden because landing is blocked or not verified.` : "No profitable known trade run was found for the current cost model."}</div>`;
     return;
   }
 
@@ -3062,15 +2988,19 @@ function renderDirectMarkets() {
       return `
         <article class="route-card ${active} ${route.access?.status && route.access.status !== "open" ? `has-access-${route.access.status}` : ""}" data-select-route="${escapeHtml(routeKey)}" data-route-group="directMarkets">
           <div class="route-head">
-            <div class="route-title">${escapeHtml(route.destination)}</div>
-            <div class="route-score mono">+${formatNumber(route.outward.margin)} cr / t</div>
+            <div class="route-title">${escapeHtml(route.origin)} → ${escapeHtml(route.destination)}</div>
+            <div class="route-score mono">${formatNumber(route.netProfit)} / run</div>
           </div>
           ${routeMeta([
-            `${formatNumber(route.jumps)} jumps`,
+            `${formatNumber(route.travelJumps)} jumps total`,
+            route.repositionJumps ? `${formatNumber(route.repositionJumps)} to start` : "Start here",
             `${formatOneDecimal(route.marginPerTonPerJump)} cr / t / jump`,
+            `Buy on <strong>${escapeHtml(formatTradeLocation(route.origin, route.access))}</strong>`,
+            `Sell on <strong>${escapeHtml(formatTradeLocation(route.destination, route.access))}</strong>`,
             `Best: <strong>${escapeHtml(route.outward.commodity)}</strong>`,
-            `${formatNumber(route.projectedProfit)} full hold`,
+            `${formatNumber(route.netProfit)} net full hold`,
           ])}
+          ${renderRouteRiskTags(route)}
           <div class="tag-row">
             ${route.topTrades
               .map(
@@ -3079,6 +3009,11 @@ function renderDirectMarkets() {
               )
               .join("")}
           </div>
+          <div class="route-note">
+            Land on <strong>${escapeHtml(formatTradeLocation(route.origin, route.access))}</strong>, buy <strong>${escapeHtml(route.outward.commodity)}</strong> at ${formatNumber(route.outward.buy)},
+            then sell on <strong>${escapeHtml(formatTradeLocation(route.destination, route.access))}</strong> at ${formatNumber(route.outward.sell)}.
+          </div>
+          ${route.operatingCost > 0 ? `<div class="route-note">Route cost: ${formatCredits(route.operatingCost)} across ${formatNumber(route.travelJumps)} jumps.</div>` : ""}
           ${renderRouteAccess(route.access)}
         </article>
       `;
@@ -3092,15 +3027,6 @@ function renderDirectMarkets() {
     ]
       .filter(Boolean)
       .join("");
-}
-
-function getBestPlanetForSystem(access, systemName) {
-  return access?.systems?.find((entry) => entry.system === systemName)?.bestPlanet || null;
-}
-
-function formatTradeLocation(systemName, access) {
-  const planet = getBestPlanetForSystem(access, systemName);
-  return planet ? `${planet} (${systemName})` : systemName;
 }
 
 function renderLoopCards(target, group, routes, emptyText) {
@@ -3118,32 +3044,36 @@ function renderLoopCards(target, group, routes, emptyText) {
       const active = activeRouteKey === routeKey ? "is-active" : "";
       const supportingMetric =
         group === "reachableLoops"
-          ? `${formatNumber(route.profitPerDayFromHere)} / day from current position`
-          : `${formatNumber(route.profitPerJump)} / jump`;
+          ? `${formatNumber(route.profitPerDayFromHere)} net / day from current position`
+          : `${formatNumber(route.netProfitPerJump || route.profitPerJump)} net / jump`;
 
       return `
         <article class="route-card ${active} ${route.access?.status && route.access.status !== "open" ? `has-access-${route.access.status}` : ""}" data-select-route="${escapeHtml(routeKey)}" data-route-group="${escapeHtml(group)}">
           <div class="route-head">
             <div class="route-title">${escapeHtml(route.origin)} → ${escapeHtml(route.destination)} → ${escapeHtml(route.origin)}</div>
-            <div class="route-score mono">${formatNumber(route.projectedProfit)} / loop</div>
+            <div class="route-score mono">${formatNumber(route.netProfit)} / loop</div>
           </div>
           ${routeMeta([
-            `${formatNumber(route.totalJumps)} jumps`,
+            `${formatNumber(route.totalJumps + (route.repositionJumps || 0))} jumps total`,
             `${formatNumber(route.totalMargin)} cr / t`,
             `${formatNumber(route.tradeCapacity || 0)} trade hold`,
             supportingMetric,
+            `Buy on <strong>${escapeHtml(formatTradeLocation(route.origin, route.access))}</strong>`,
+            `Return via <strong>${escapeHtml(formatTradeLocation(route.destination, route.access))}</strong>`,
             route.repositionJumps !== undefined ? `${formatNumber(route.repositionJumps)} to start` : "",
           ].filter(Boolean))}
+          ${renderRouteRiskTags(route)}
           <div class="route-note">
-            Outbound: buy <strong>${escapeHtml(route.outward.commodity)}</strong> in ${escapeHtml(formatTradeLocation(route.origin, route.access))}
+            Outbound: land on <strong>${escapeHtml(formatTradeLocation(route.origin, route.access))}</strong>, buy <strong>${escapeHtml(route.outward.commodity)}</strong>
             at ${formatNumber(route.outward.buy)} and sell in ${escapeHtml(formatTradeLocation(route.destination, route.access))}
             at ${formatNumber(route.outward.sell)}.
           </div>
           <div class="route-note">
-            Return: buy <strong>${escapeHtml(route.inbound.commodity)}</strong> in ${escapeHtml(formatTradeLocation(route.destination, route.access))}
+            Return: land on <strong>${escapeHtml(formatTradeLocation(route.destination, route.access))}</strong>, buy <strong>${escapeHtml(route.inbound.commodity)}</strong>
             at ${formatNumber(route.inbound.buy)} and sell in ${escapeHtml(formatTradeLocation(route.origin, route.access))}
             at ${formatNumber(route.inbound.sell)}.
           </div>
+          ${route.operatingCost > 0 ? `<div class="route-note">Route cost: ${formatCredits(route.operatingCost)} across ${formatNumber(route.totalJumps + (route.repositionJumps || 0))} jumps.</div>` : ""}
           ${renderRouteAccess(route.access)}
           <div class="route-actions">
             <button class="button-inline" data-track-loop="${escapeHtml(routeKey)}" type="button">Track loop</button>
@@ -3202,64 +3132,24 @@ function renderActiveRouteCard() {
     activeRouteCard.classList.remove("has-route");
     return;
   }
-  let body = "";
-  if (trackerState.stage === "positioning") {
-    body = `Fly to <strong>${escapeHtml(trackerState.origin)}</strong> to begin the loop.`;
-  } else if (trackerState.stage === "outbound-ready") {
-    body = `
-      You are at <strong>${escapeHtml(trackerState.origin)}</strong>. Buy
-      <strong>${escapeHtml(trackerState.outwardCommodity)}</strong> and launch.
-      <div class="route-actions">
-        <button class="button-inline" id="tracker-start-outbound" type="button">Cargo loaded</button>
-      </div>
-    `;
-  } else if (trackerState.stage === "outbound") {
-    body = `Outbound leg to <strong>${escapeHtml(trackerState.destination)}</strong> with <strong>${escapeHtml(trackerState.outwardCommodity)}</strong>.`;
-  } else if (trackerState.stage === "return-ready") {
-    body = `
-      You reached <strong>${escapeHtml(trackerState.destination)}</strong>. Sell
-      <strong>${escapeHtml(trackerState.outwardCommodity)}</strong>, buy
-      <strong>${escapeHtml(trackerState.inboundCommodity)}</strong>, and depart.
-      <div class="route-actions">
-        <button class="button-inline" id="tracker-start-return" type="button">Return cargo loaded</button>
-      </div>
-    `;
-  } else if (trackerState.stage === "return") {
-    body = `Return leg to <strong>${escapeHtml(trackerState.origin)}</strong> with <strong>${escapeHtml(trackerState.inboundCommodity)}</strong>.`;
-  } else if (trackerState.stage === "completed") {
-    body = `
-      Loop complete. Finished laps: <strong>${formatNumber(trackerState.laps || 0)}</strong>.
-      <div class="route-actions">
-        <button class="button-inline" id="tracker-next-lap" type="button">Start next lap</button>
-      </div>
-    `;
-  }
+  const stageMeta = getTrackerStageMeta(trackerState, currentSystem);
 
   activeRouteCard.innerHTML = `
     <div class="active-route-head">
       <div>
         <div class="active-route-label">Tracked loop</div>
-        <div class="active-route-title">${escapeHtml(`${trackerState.origin} → ${trackerState.destination} → ${trackerState.origin}`)}</div>
+        <div class="active-route-title">${escapeHtml(stageMeta?.title || `${trackerState.origin} → ${trackerState.destination} → ${trackerState.origin}`)}</div>
       </div>
       <div class="route-actions">
         <div class="active-route-score mono">${formatNumber(trackerState.laps || 0)} laps</div>
         <button class="button-inline" id="active-route-untrack" type="button">Untrack</button>
       </div>
     </div>
-    <div class="tracker-line muted">Current system: <span class="mono">${escapeHtml(currentSystem)}</span></div>
-    <div class="active-route-copy">${body}</div>
+    <div class="tracker-line muted">${escapeHtml(stageMeta?.stageLabel || "Tracking")} · <span class="mono">${escapeHtml(currentSystem)}</span></div>
+    <div class="active-route-copy">${escapeHtml(stageMeta?.copy || `Current system: ${currentSystem}.`)}</div>
   `;
   activeRouteCard.classList.add("has-route");
   document.getElementById("active-route-untrack")?.addEventListener("click", clearTracker);
-  document.getElementById("tracker-start-outbound")?.addEventListener("click", () => {
-    setTrackerState({ ...trackerState, stage: "outbound" });
-  });
-  document.getElementById("tracker-start-return")?.addEventListener("click", () => {
-    setTrackerState({ ...trackerState, stage: "return" });
-  });
-  document.getElementById("tracker-next-lap")?.addEventListener("click", () => {
-    setTrackerState({ ...trackerState, stage: "outbound-ready" });
-  });
 }
 
 function renderPlanner() {
@@ -3268,7 +3158,7 @@ function renderPlanner() {
     localLoops,
     "localLoops",
     state.status?.market?.planner?.loopsFromHere || [],
-    "No worthwhile loop was found from the current system."
+    "No worthwhile known trade loop was found for the current cost model."
   );
   bindRouteInteractions();
   renderActiveRouteCard();
@@ -3616,6 +3506,23 @@ function getAtlasSystems() {
   return systems.filter((system) => knownNames.has(system.name));
 }
 
+function getAllAtlasSystems() {
+  const liveSystems = state.status?.wiki?.systems || [];
+  const liveByName = new Map(liveSystems.map((system) => [system.name, system]));
+  return (state.bootstrap?.map?.systems || []).map((system) => {
+    const live = liveByName.get(system.name);
+    return {
+      ...system,
+      ...(live || {}),
+      links: system.links || [],
+      planets: live?.planets || [],
+      prices: live?.prices || {},
+      government: live?.government || system.government || null,
+      hasTrade: Boolean(live?.hasTrade || system.hasTrade),
+    };
+  });
+}
+
 function getOpenedPlanetNames() {
   const names = new Set(state.status?.player?.visitedPlanets || []);
   if (state.status?.player?.currentPlanet) {
@@ -3632,45 +3539,6 @@ function filterOpenedLocations(locations = []) {
   return locations.filter((location) => openedPlanets.has(location.planet));
 }
 
-function firstCopyLine(...values) {
-  for (const value of values) {
-    if (Array.isArray(value)) {
-      const line = value.find((entry) => String(entry || "").trim());
-      if (line) {
-        return String(line).trim();
-      }
-      continue;
-    }
-    if (String(value || "").trim()) {
-      return String(value).trim();
-    }
-  }
-  return "";
-}
-
-function clampCopy(text, limit = 180) {
-  const source = String(text || "").replace(/\s+/g, " ").trim();
-  if (!source) {
-    return "";
-  }
-  if (source.length <= limit) {
-    return source;
-  }
-  return `${source.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
-}
-
-function uniqueByName(items = []) {
-  const seen = new Set();
-  const result = [];
-  for (const item of items) {
-    if (!item?.name || seen.has(item.name)) {
-      continue;
-    }
-    seen.add(item.name);
-    result.push(item);
-  }
-  return result;
-}
 
 function wikiVisibility(label, tone, opened = false) {
   return { label, tone, opened };
@@ -3882,21 +3750,7 @@ function buildWikiData() {
     )
     .map((mission) => ({
       ...mission,
-      shortCopy: clampCopy(
-        mission.description ||
-          mission.summary ||
-          [
-          mission.source ? `From ${mission.source}` : "",
-          mission.destination ? `to ${mission.destination}` : "",
-          mission.cargoName && mission.cargoTons
-            ? `${formatNumber(mission.cargoTons)} tons of ${mission.cargoName}`
-            : "",
-          mission.passengers ? `${formatNumber(mission.passengers)} passengers` : "",
-        ]
-          .filter(Boolean)
-          .join(" · "),
-        220
-      ),
+      shortCopy: clampCopy(humanizeMissionSummary(mission), 220),
     }));
 
   const worldState = worlds
@@ -3906,92 +3760,7 @@ function buildWikiData() {
       if (!base && !override?.present) {
         return null;
       }
-      const notes = [];
-      const pushNote = (note) => {
-        if (note && !notes.includes(note)) {
-          notes.push(note);
-        }
-      };
-      if (base && Boolean(base.shipyards?.length) !== Boolean(planet.shipyards?.length)) {
-        pushNote(
-          planet.shipyards?.length
-            ? "Shipyard access changed in the current save."
-            : "Shipyard access has been removed in the current save."
-        );
-      }
-      if (base && Boolean(base.outfitters?.length) !== Boolean(planet.outfitters?.length)) {
-        pushNote(
-          planet.outfitters?.length
-            ? "Outfitter access changed in the current save."
-            : "Outfitter access has been removed in the current save."
-        );
-      }
-      if (base && (base.requiredReputation ?? 0) !== (planet.requiredReputation ?? 0)) {
-        pushNote(
-          (planet.requiredReputation ?? 0) > 0
-            ? `This world now requires ${formatNumber(planet.requiredReputation)} reputation to land.`
-            : "Landing requirements here have changed."
-        );
-      }
-      if (base && (base.security ?? null) !== (planet.security ?? null) && planet.security !== null && planet.security !== undefined) {
-        pushNote(`Security has been overridden to ${formatTwoDecimals(planet.security)} in the current save.`);
-      }
-      const baseCopy = base ? firstCopyLine(base.descriptions, base.spaceport) : "";
-      const currentCopy = firstCopyLine(planet.descriptions, planet.spaceport);
-      if (baseCopy && currentCopy && baseCopy !== currentCopy) {
-        pushNote("The local description has changed in the current save state.");
-      }
-
-      if (override?.present) {
-        if (override.shipyardClear) {
-          pushNote("A save override explicitly clears the local shipyard.");
-        }
-        if (override.outfitterClear) {
-          pushNote("A save override explicitly clears the local outfitter.");
-        }
-        if (override.shipyardAdds?.length) {
-          pushNote(
-            override.shipyardAdds.length === 1
-              ? `A shipyard group is added here in the current save.`
-              : `${formatNumber(override.shipyardAdds.length)} shipyard groups are added here in the current save.`
-          );
-        }
-        if (override.outfitterAdds?.length) {
-          pushNote(
-            override.outfitterAdds.length === 1
-              ? `An outfitter group is added here in the current save.`
-              : `${formatNumber(override.outfitterAdds.length)} outfitter groups are added here in the current save.`
-          );
-        }
-        if (
-          override.requiredReputation !== null &&
-          override.requiredReputation !== undefined &&
-          (!base || (base.requiredReputation ?? 0) === (planet.requiredReputation ?? 0))
-        ) {
-          pushNote(
-            override.requiredReputation > 0
-              ? `A save override sets landing reputation to ${formatNumber(override.requiredReputation)}.`
-              : "A save override changes the local landing requirement."
-          );
-        }
-        if (
-          override.security !== null &&
-          override.security !== undefined &&
-          (!base || (base.security ?? null) === (planet.security ?? null))
-        ) {
-          pushNote(`A save override sets local security to ${formatTwoDecimals(override.security)}.`);
-        }
-        if (override.descriptionsCount && (!baseCopy || baseCopy === currentCopy)) {
-          pushNote("A local description override exists in the current save.");
-        }
-        if (override.spaceportCount) {
-          pushNote(
-            override.spaceportCount === 1
-              ? "A local spaceport text override exists in the current save."
-              : `${formatNumber(override.spaceportCount)} local spaceport text overrides exist in the current save.`
-          );
-        }
-      }
+      const notes = humanizeWorldStateNotes(planet, base, override);
       if (!notes.length) {
         return null;
       }
@@ -4103,102 +3872,164 @@ function buildWikiData() {
   };
 }
 
-function getAtlasMapProjection(systems) {
-  if (!systems.length) {
-    return null;
+function updateAtlasMapViewBox() {
+  if (!atlasMapSvg || !state.atlasMapView) {
+    return;
+  }
+  const viewBox = `${state.atlasMapView.x} ${state.atlasMapView.y} ${state.atlasMapView.width} ${state.atlasMapView.height}`;
+  atlasMapSvg.setAttribute("viewBox", viewBox);
+  if (atlasMapOverlaySvg) {
+    atlasMapOverlaySvg.setAttribute("viewBox", viewBox);
+  }
+  updateAtlasMapVisualScale();
+}
+
+function updateAtlasMapVisualScale() {
+  const wrap = atlasMapSvg?.closest(".atlas-map-wrap");
+  if (!wrap || !atlasMapOverlaySvg || !state.atlasMapView || !state.atlasMapVisualEntries?.length) {
+    if (atlasMapOverlaySvg) {
+      atlasMapOverlaySvg.innerHTML = "";
+    }
+    return;
   }
 
-  const xs = systems.map((system) => system.x);
-  const ys = systems.map((system) => system.y);
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-  const size = 1800;
-  const padding = 170;
-  const spanX = Math.max(1, maxX - minX);
-  const spanY = Math.max(1, maxY - minY);
-  const scale = Math.min((size - padding * 2) / spanX, (size - padding * 2) / spanY);
-  const contentWidth = spanX * scale;
-  const contentHeight = spanY * scale;
-  const offsetX = (size - contentWidth) / 2;
-  const offsetY = (size - contentHeight) / 2;
+  const width = Math.max(1, wrap.clientWidth || wrap.getBoundingClientRect().width || 1);
+  const height = Math.max(1, wrap.clientHeight || wrap.getBoundingClientRect().height || 1);
+  const view = state.atlasMapView;
+  const worldScale = Math.min(
+    width / Math.max(1, view.width),
+    height / Math.max(1, view.height)
+  );
+  const inverseScale = 1 / Math.max(worldScale, 0.0001);
+  const renderedWidth = view.width * worldScale;
+  const renderedHeight = view.height * worldScale;
+  const offsetX = (width - renderedWidth) / 2;
+  const offsetY = (height - renderedHeight) / 2;
+  const hitRadius = 12;
+  const selectedRadius = 4.5;
+  const currentRadius = 4.1;
+  const defaultRadius = 2.2;
+  const wrapRect = wrap.getBoundingClientRect();
+  const blockedRects = [atlasMapPlanet, atlasMapMarket]
+    .filter((element) => element && !element.hidden && element.innerHTML.trim())
+    .map((element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        left: rect.left - wrapRect.left,
+        right: rect.right - wrapRect.left,
+        top: rect.top - wrapRect.top,
+        bottom: rect.bottom - wrapRect.top,
+      };
+    });
 
+  const overlayMarkup = state.atlasMapVisualEntries
+    .filter((entry) => isAtlasEntryInView(entry, view, 10 * inverseScale))
+    .map((entry) => {
+      const screenX = offsetX + (entry.x - view.x) * worldScale;
+      const screenY = offsetY + (entry.y - view.y) * worldScale;
+      const estimatedWidth = Math.max(52, entry.name.length * 6.5);
+      const estimatedHeight = 16;
+      const candidates = [
+        { dx: 8, dy: -8 },
+        { dx: 8, dy: 14 },
+        { dx: -estimatedWidth - 8, dy: -8 },
+        { dx: -estimatedWidth - 8, dy: 14 },
+        { dx: 14, dy: -24 },
+        { dx: 14, dy: 28 },
+      ];
+      let labelDx = candidates[0].dx;
+      let labelDy = candidates[0].dy;
+      for (const candidate of candidates) {
+        const labelLeft = screenX + candidate.dx - 2;
+        const labelRight = labelLeft + estimatedWidth;
+        const labelTop = screenY + candidate.dy - estimatedHeight + 2;
+        const labelBottom = labelTop + estimatedHeight;
+        const inBounds =
+          labelLeft >= 4 &&
+          labelRight <= width - 4 &&
+          labelTop >= 4 &&
+          labelBottom <= height - 4;
+        if (!inBounds) {
+          continue;
+        }
+        const overlaps = blockedRects.some(
+          (rect) =>
+            labelRight >= rect.left &&
+            labelLeft <= rect.right &&
+            labelBottom >= rect.top &&
+            labelTop <= rect.bottom
+        );
+        if (!overlaps) {
+          labelDx = candidate.dx;
+          labelDy = candidate.dy;
+          break;
+        }
+      }
+      const nodeClass = [
+        "atlas-node",
+        entry.isCurrent ? "is-current" : "",
+        entry.isSelected ? "is-selected" : "",
+        entry.isUnknown ? "is-unknown" : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      const labelClass = [
+        "atlas-map-label",
+        entry.isCurrent ? "is-current" : "",
+        entry.isSelected ? "is-selected" : "",
+        entry.isUnknown ? "is-unknown" : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      const radius = entry.isSelected
+        ? selectedRadius
+        : entry.isCurrent
+          ? currentRadius
+          : defaultRadius;
+      return `
+        <g class="atlas-map-overlay-node" data-atlas-node="${escapeHtml(entry.name)}" transform="translate(${entry.x} ${entry.y}) scale(${inverseScale})">
+          <circle cx="0" cy="0" r="${hitRadius}" class="atlas-node-hit" data-atlas-node="${escapeHtml(entry.name)}" />
+          <circle cx="0" cy="0" r="${radius}" class="${nodeClass}" />
+          <text x="${labelDx}" y="${labelDy}" class="${labelClass}" data-atlas-node="${escapeHtml(entry.name)}">${escapeHtml(entry.name)}</text>
+        </g>
+      `;
+    })
+    .join("");
+
+  atlasMapOverlaySvg.innerHTML = overlayMarkup;
+}
+
+function getAtlasViewportMetrics() {
+  const wrap = atlasMapSvg?.closest(".atlas-map-wrap");
+  const rect = wrap?.getBoundingClientRect();
   return {
-    width: size,
-    height: size,
-    padding,
-    key: `${systems.length}:${minX}:${maxX}:${minY}:${maxY}`,
-    project(system) {
-      const x = offsetX + (system.x - minX) * scale;
-      const y = offsetY + (system.y - minY) * scale;
-      return [x, y];
-    },
+    width: Math.max(1, wrap?.clientWidth || rect?.width || 1),
+    height: Math.max(1, wrap?.clientHeight || rect?.height || 1),
   };
 }
 
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function lerp(start, end, t) {
-  return start + (end - start) * t;
-}
-
-function easeOutCubic(t) {
-  return 1 - Math.pow(1 - t, 3);
-}
-
-function clampAtlasView(view, projection) {
-  const minSize = projection.width * 0.08;
-  const bounds = state.atlasAllBounds;
-  const maxSize = bounds
-    ? Math.max(projection.width, bounds.maxX - bounds.minX + projection.padding * 2, bounds.maxY - bounds.minY + projection.padding * 2)
-    : projection.width;
-  const width = clamp(view.width, minSize, maxSize);
-  const height = clamp(view.height ?? width, minSize, maxSize);
-  const overscanX = Math.min(projection.padding * 0.75, width * 0.14);
-  const overscanY = Math.min(projection.padding * 0.75, height * 0.14);
-  const panMinX = bounds ? Math.min(-overscanX, bounds.minX) : -overscanX;
-  const panMinY = bounds ? Math.min(-overscanY, bounds.minY) : -overscanY;
-  const panMaxX = bounds
-    ? Math.max(projection.width - width + overscanX, bounds.maxX - width)
-    : Math.max(-overscanX, projection.width - width + overscanX);
-  const panMaxY = bounds
-    ? Math.max(projection.height - height + overscanY, bounds.maxY - height)
-    : Math.max(-overscanY, projection.height - height + overscanY);
-  return {
-    ...view,
+function getAtlasDefaultViewForViewport(projection, bounds) {
+  const { width, height } = getAtlasViewportMetrics();
+  const sourceBounds = bounds || {
+    minX: 0,
+    maxX: projection.width,
+    minY: 0,
+    maxY: projection.height,
+  };
+  const fitted = fitViewBox(
+    sourceBounds.minX,
+    sourceBounds.minY,
+    sourceBounds.maxX,
+    sourceBounds.maxY,
     width,
     height,
-    x: clamp(view.x, panMinX, Math.max(panMinX, panMaxX)),
-    y: clamp(view.y, panMinY, Math.max(panMinY, panMaxY)),
-  };
-}
-
-function getDefaultAtlasView(projection) {
-  return {
-    x: 0,
-    y: 0,
-    width: projection.width,
-    height: projection.height,
-  };
-}
-
-function getAtlasFocusView(entry, projection, zoom = 0.28) {
-  const size = clamp(projection.width * zoom, projection.width * 0.08, projection.width * 0.5);
-  return clampAtlasView(
-    {
-      x: entry.x - size / 2,
-      y: entry.y - size / 2,
-      width: size,
-      height: size,
-    },
-    projection
+    projection.width,
+    projection.height
   );
+  return clampAtlasView(fitted, projection, bounds);
 }
 
-function getAtlasFocusViewForNames(names, projection, systemsMap, fallbackName = null) {
+function getAtlasFocusViewForNamesInViewport(names, projection, systemsMap, bounds, fallbackName = null, zoom = 0.22) {
   const entries = [...new Set(names)]
     .map((name) => systemsMap[name])
     .filter(Boolean)
@@ -4206,46 +4037,44 @@ function getAtlasFocusViewForNames(names, projection, systemsMap, fallbackName =
       const [x, y] = projection.project(system);
       return { x, y };
     });
-
+  const { width, height } = getAtlasViewportMetrics();
   if (!entries.length) {
     if (fallbackName && systemsMap[fallbackName]) {
       const [x, y] = projection.project(systemsMap[fallbackName]);
-      return getAtlasFocusView({ x, y }, projection, 0.24);
+      const span = projection.width * zoom;
+      const fitted = fitViewBox(
+        x - span / 2,
+        y - span / 2,
+        x + span / 2,
+        y + span / 2,
+        width,
+        height,
+        projection.width,
+        projection.height
+      );
+      return clampAtlasView(fitted, projection, bounds);
     }
-    return getDefaultAtlasView(projection);
+    return getAtlasDefaultViewForViewport(projection, bounds);
   }
-
-  if (entries.length === 1) {
-    return getAtlasFocusView(entries[0], projection, 0.24);
-  }
-
   const xs = entries.map((entry) => entry.x);
   const ys = entries.map((entry) => entry.y);
   const minX = Math.min(...xs);
   const maxX = Math.max(...xs);
   const minY = Math.min(...ys);
   const maxY = Math.max(...ys);
-  const span = Math.max(maxX - minX, maxY - minY, projection.width * 0.12);
-  const padding = Math.max(48, span * 0.16);
-  return clampAtlasView(
-    {
-      x: minX - padding,
-      y: minY - padding,
-      width: span + padding * 2,
-      height: span + padding * 2,
-    },
-    projection
+  const span = Math.max(maxX - minX, maxY - minY, projection.width * 0.08);
+  const padding = Math.max(40, span * 0.16);
+  const fitted = fitViewBox(
+    minX - padding,
+    minY - padding,
+    maxX + padding,
+    maxY + padding,
+    width,
+    height,
+    projection.width,
+    projection.height
   );
-}
-
-function updateAtlasMapViewBox() {
-  if (!atlasMapSvg || !state.atlasMapView) {
-    return;
-  }
-  atlasMapSvg.setAttribute(
-    "viewBox",
-    `${state.atlasMapView.x} ${state.atlasMapView.y} ${state.atlasMapView.width} ${state.atlasMapView.height}`
-  );
+  return clampAtlasView(fitted, projection, bounds);
 }
 
 function cancelAtlasMapAnimation() {
@@ -4257,8 +4086,12 @@ function cancelAtlasMapAnimation() {
 
 function animateAtlasMapView(targetView, projection, duration = 260) {
   cancelAtlasMapAnimation();
-  const startView = clampAtlasView(state.atlasMapView || getDefaultAtlasView(projection), projection);
-  const endView = clampAtlasView(targetView, projection);
+  const startView = clampAtlasView(
+    state.atlasMapView || getAtlasDefaultViewForViewport(projection, state.atlasAllBounds),
+    projection,
+    state.atlasAllBounds
+  );
+  const endView = clampAtlasView(targetView, projection, state.atlasAllBounds);
 
   if (
     Math.abs(startView.x - endView.x) < 0.5 &&
@@ -4295,13 +4128,13 @@ function animateAtlasMapView(targetView, projection, duration = 260) {
 function ensureAtlasMapView(projection) {
   if (!state.atlasMapView || state.atlasMapProjectionKey !== projection.key) {
     cancelAtlasMapAnimation();
-    state.atlasMapView = getDefaultAtlasView(projection);
+    state.atlasMapView = getAtlasDefaultViewForViewport(projection, state.atlasAllBounds);
     state.atlasMapProjectionKey = projection.key;
     return;
   }
 
   state.atlasMapProjectionKey = projection.key;
-  state.atlasMapView = clampAtlasView(state.atlasMapView, projection);
+  state.atlasMapView = clampAtlasView(state.atlasMapView, projection, state.atlasAllBounds);
 }
 
 function focusAtlasSystem(systemName, options = {}) {
@@ -4415,7 +4248,9 @@ function renderAtlasList() {
 
 function renderAtlasMap() {
   const systems = getAtlasSystems();
-  const systemsMap = getSystemsMap();
+  const allSystems = getAllAtlasSystems();
+  const systemsMap = Object.fromEntries(allSystems.map((system) => [system.name, system]));
+  const viewport = getAtlasViewportMetrics();
   const currentSystem = state.status?.player?.currentSystem;
   const selectedSystem = state.atlasSelectedSystem;
   const liveKnownNames = getLiveKnownSystemNames();
@@ -4438,11 +4273,13 @@ function renderAtlasMap() {
     }
   }
   const visibleSystems = systems.filter((system) => visibleNameSet.has(system.name));
-  const projectionBasis = visibleSystems.filter((s) => focusNameSet.has(s.name));
-  const projection = getAtlasMapProjection(projectionBasis.length > 0 ? projectionBasis : visibleSystems);
+  const projection = getAtlasMapProjection(allSystems, viewport.width / Math.max(1, viewport.height));
   state.atlasMapProjectionWidth = projection?.width ?? 1800;
   if (!projection) {
     atlasMapSvg.innerHTML = "";
+    if (atlasMapOverlaySvg) {
+      atlasMapOverlaySvg.innerHTML = "";
+    }
     if (atlasMapMarket) {
       atlasMapMarket.innerHTML = "";
     }
@@ -4484,13 +4321,17 @@ function renderAtlasMap() {
     wormholeMarkup += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" class="mini-link mini-link-wormhole" />`;
   }
 
-  const pointEntries = visibleSystems.map((system) => {
+  const allPointEntries = allSystems.map((system) => {
     const [x, y] = projection.project(system);
     return { ...system, x, y };
   });
-  if (pointEntries.length > 0) {
-    const xs = pointEntries.map((e) => e.x);
-    const ys = pointEntries.map((e) => e.y);
+  const pointEntryMap = new Map(allPointEntries.map((entry) => [entry.name, entry]));
+  const pointEntries = visibleSystems
+    .map((system) => pointEntryMap.get(system.name))
+    .filter(Boolean);
+  if (allPointEntries.length > 0) {
+    const xs = allPointEntries.map((e) => e.x);
+    const ys = allPointEntries.map((e) => e.y);
     state.atlasAllBounds = {
       minX: Math.min(...xs) - projection.padding,
       maxX: Math.max(...xs) + projection.padding,
@@ -4508,15 +4349,16 @@ function renderAtlasMap() {
   if (!state.atlasMapView || state.atlasMapProjectionKey !== projection.key) {
     cancelAtlasMapAnimation();
     state.atlasMapProjectionKey = projection.key;
-    state.atlasMapView = getAtlasFocusViewForNames(
+      state.atlasMapView = getAtlasFocusViewForNamesInViewport(
       [...focusNameSet],
       projection,
       systemsMap,
+      state.atlasAllBounds,
       initialFocusEntry?.name || currentSystem || selectedSystem || null
     );
   } else {
     state.atlasMapProjectionKey = projection.key;
-    state.atlasMapView = clampAtlasView(state.atlasMapView, projection);
+    state.atlasMapView = clampAtlasView(state.atlasMapView, projection, state.atlasAllBounds);
   }
   const pendingFocus =
     state.atlasPendingFocus &&
@@ -4531,10 +4373,11 @@ function renderAtlasMap() {
             return component ? [...component] : [state.atlasPendingFocus.name];
           })()
         : [state.atlasPendingFocus.name];
-    const targetView = getAtlasFocusViewForNames(
+    const targetView = getAtlasFocusViewForNamesInViewport(
       pendingFocusNames,
       projection,
       systemsMap,
+      state.atlasAllBounds,
       state.atlasPendingFocus.name
     );
     if (state.atlasPendingFocus.animate) {
@@ -4544,56 +4387,29 @@ function renderAtlasMap() {
     }
     state.atlasPendingFocus = null;
   }
-  const atlasView = clampAtlasView(state.atlasMapView || getDefaultAtlasView(projection), projection);
+  const atlasView = clampAtlasView(
+    state.atlasMapView || getAtlasDefaultViewForViewport(projection, state.atlasAllBounds),
+    projection,
+    state.atlasAllBounds
+  );
   state.atlasMapView = atlasView;
+  const atlasWrap = atlasMapSvg.closest(".atlas-map-wrap");
 
-  const points = pointEntries
-    .map((system) => {
-      const isUnknown = state.debugMode && !liveKnownNames.has(system.name) && system.name !== currentSystem;
-      const classes = [
-        "atlas-node",
-        isUnknown ? "is-unknown" : "",
-        system.name === currentSystem ? "is-current" : "",
-        system.name === selectedSystem ? "is-selected" : "",
-      ]
-        .filter(Boolean)
-        .join(" ");
-      const radius =
-        system.name === selectedSystem ? 4.1 : system.name === currentSystem ? 3.8 : isUnknown ? 1.4 : 1.9;
-      return `
-        <circle cx="${system.x}" cy="${system.y}" r="13" class="atlas-node-hit" data-atlas-node="${escapeHtml(system.name)}" />
-        <circle cx="${system.x}" cy="${system.y}" r="${radius}" class="${classes}" />
-      `;
-    })
-    .join("");
+  state.atlasMapVisualEntries = pointEntries.map((system) => ({
+    name: system.name,
+    x: system.x,
+    y: system.y,
+    isCurrent: system.name === currentSystem,
+    isSelected: system.name === selectedSystem,
+    isUnknown: !knownNames.has(system.name),
+  }));
 
-  const labels = pointEntries
-    .map((system) => {
-      const isUnknownLabel = state.debugMode && !liveKnownNames.has(system.name) && system.name !== currentSystem && system.name !== selectedSystem;
-      const labelClass = [
-        "atlas-map-label",
-        isUnknownLabel ? "is-unknown" : "",
-        system.name === currentSystem ? "is-current" : system.name === selectedSystem ? "is-selected" : "",
-      ].filter(Boolean).join(" ");
-      return `
-        <text
-          x="${system.x + 9}"
-          y="${system.y - 9}"
-          class="${labelClass}"
-          data-atlas-node="${escapeHtml(system.name)}"
-        >${escapeHtml(system.name)}</text>
-      `;
-    })
-    .join("");
-
-  updateAtlasMapViewBox();
   atlasMapSvg.innerHTML = `
     <rect x="0" y="0" width="${projection.width}" height="${projection.height}" class="map-bg" />
     ${linkMarkup}
     ${wormholeMarkup}
-    ${points}
-    ${labels}
   `;
+  updateAtlasMapViewBox();
 
   const selected = getAtlasSystems().find((system) => system.name === selectedSystem) || null;
   const currentPrices =
@@ -4606,6 +4422,7 @@ function renderAtlasMap() {
     if (!selected) {
       atlasMapMarket.innerHTML = "";
     } else {
+      const isCurrentSystem = selected.name === currentSystem;
       const government =
         livePlanets.find((planet) => planet.government)?.government ||
         livePlanets[0]?.systemGovernment ||
@@ -4630,7 +4447,7 @@ function renderAtlasMap() {
       atlasMapMarket.innerHTML = `
         <div class="atlas-market-head">
           <div class="atlas-market-title">${escapeHtml(selected.name)}</div>
-          <div class="atlas-market-subtitle">${escapeHtml(government || "Unknown government")}</div>
+          <div class="atlas-market-subtitle">${escapeHtml(isCurrentSystem ? "Current local prices" : government || "Unknown government")}</div>
         </div>
         ${
           marketRows.length
@@ -4638,13 +4455,16 @@ function renderAtlasMap() {
                 ${marketRows
                   .map(
                     (row) => {
-                      const deltaStr = row.delta === null
-                        ? "—"
-                        : (row.delta > 0 ? "+" : "") + formatNumber(row.delta);
+                      const valueStr = isCurrentSystem
+                        ? formatNumber(row.price)
+                        : row.delta === null
+                          ? "—"
+                          : (row.delta > 0 ? "+" : "") + formatNumber(row.delta);
+                      const valueClass = isCurrentSystem ? "atlas-market-value is-price" : `atlas-market-delta is-${row.tone}`;
                       return `
                       <div class="atlas-market-row">
                         <div class="atlas-market-commodity">${escapeHtml(row.commodity)}</div>
-                        <div class="atlas-market-delta is-${row.tone}">${deltaStr}</div>
+                        <div class="${valueClass}">${valueStr}</div>
                       </div>
                     `;}
                   )
@@ -4721,10 +4541,10 @@ function renderAtlasMap() {
     atlasMapStock.innerHTML = "";
   }
 
-  atlasMapSvg.onpointerdown = (event) => {
+  atlasWrap.onpointerdown = (event) => {
     event.preventDefault();
     cancelAtlasMapAnimation();
-    const rect = atlasMapSvg.getBoundingClientRect();
+    const rect = atlasWrap.getBoundingClientRect();
     const hitNode = event.target?.closest?.("[data-atlas-node]");
     state.atlasMapDrag = {
       startClientX: event.clientX,
@@ -4736,9 +4556,8 @@ function renderAtlasMap() {
       moved: false,
       hitSystem: hitNode?.dataset?.atlasNode || null,
     };
-    atlasMapSvg.setPointerCapture?.(event.pointerId);
   };
-  atlasMapSvg.onpointermove = (event) => {
+  atlasWrap.onpointermove = (event) => {
     if (!state.atlasMapDrag || !state.atlasMapView) {
       return;
     }
@@ -4758,12 +4577,13 @@ function renderAtlasMap() {
           state.atlasMapDrag.startY -
           (dy / Math.max(1, state.atlasMapDrag.heightPx)) * state.atlasMapView.height,
       },
-      projection
+      projection,
+      state.atlasAllBounds
     );
     state.atlasMapView = nextView;
     updateAtlasMapViewBox();
   };
-  atlasMapSvg.onpointerup = () => {
+  atlasWrap.onpointerup = () => {
     const drag = state.atlasMapDrag;
     state.atlasMapDrag = null;
     if (drag?.moved) {
@@ -4774,32 +4594,42 @@ function renderAtlasMap() {
       focusAtlasSystem(drag.hitSystem, { animate: true });
     }
   };
-  atlasMapSvg.onpointercancel = () => {
+  atlasWrap.onpointerleave = () => {
     state.atlasMapDrag = null;
   };
-  atlasMapSvg.onwheel = (event) => {
+  atlasWrap.onpointercancel = () => {
+    state.atlasMapDrag = null;
+  };
+  atlasWrap.onwheel = (event) => {
     event.preventDefault();
     cancelAtlasMapAnimation();
-    const rect = atlasMapSvg.getBoundingClientRect();
-    const currentView = clampAtlasView(state.atlasMapView || getDefaultAtlasView(projection), projection);
+    const rect = atlasWrap.getBoundingClientRect();
+    const currentView = clampAtlasView(
+      state.atlasMapView || getAtlasDefaultViewForViewport(projection, state.atlasAllBounds),
+      projection,
+      state.atlasAllBounds
+    );
     const pointerX = clamp((event.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
     const pointerY = clamp((event.clientY - rect.top) / Math.max(1, rect.height), 0, 1);
     const worldX = currentView.x + currentView.width * pointerX;
     const worldY = currentView.y + currentView.height * pointerY;
-    const zoomFactor = event.deltaY > 0 ? 1.12 : 0.88;
+    const zoomFactor = event.deltaY > 0 ? 1.15 : 0.82;
     const b2 = state.atlasAllBounds;
     const maxZoomOut = b2
-      ? Math.max(projection.width, b2.maxX - b2.minX + projection.padding * 2, b2.maxY - b2.minY + projection.padding * 2)
-      : projection.width;
-    const nextSize = clamp(currentView.width * zoomFactor, projection.width * 0.08, maxZoomOut);
+      ? Math.max(projection.width * 1.45, b2.maxX - b2.minX + projection.padding * 2, b2.maxY - b2.minY + projection.padding * 2)
+      : projection.width * 1.45;
+    const aspect = currentView.width / Math.max(1, currentView.height);
+    const nextWidth = clamp(currentView.width * zoomFactor, projection.width * 0.035, maxZoomOut);
+    const nextHeight = nextWidth / Math.max(aspect, 0.0001);
     state.atlasMapView = clampAtlasView(
       {
-        x: worldX - nextSize * pointerX,
-        y: worldY - nextSize * pointerY,
-        width: nextSize,
-        height: nextSize,
+        x: worldX - nextWidth * pointerX,
+        y: worldY - nextHeight * pointerY,
+        width: nextWidth,
+        height: nextHeight,
       },
-      projection
+      projection,
+      state.atlasAllBounds
     );
     updateAtlasMapViewBox();
   };
@@ -5235,12 +5065,21 @@ function renderWiki() {
 }
 
 function renderSettings() {
-  if (!settingsOverview || !settingsSave || !settingsGame) {
+  if (!settingsOverview || !settingsSave || !settingsGame || !settingsPlanner) {
     return;
   }
 
   const saveInfo = getSaveInfo();
   const gameInfo = getGameInfo();
+  const plannerSettings = getPlannerSettings();
+  const operatingCostPerJump = Math.max(0, Math.round(Number(plannerSettings?.operatingCostPerJump) || 0));
+  const salaryPerJump = Math.max(0, Math.round(Number(plannerSettings?.salaryPerJump) || 0));
+  const debtPerJump = Math.max(0, Math.round(Number(plannerSettings?.debtPerJump) || 0));
+  const illegalOutfitRiskPerJump = Math.max(0, Math.round(Number(plannerSettings?.illegalOutfitRiskPerJump) || 0));
+  const illegalMissionRiskPerJump = Math.max(0, Math.round(Number(plannerSettings?.illegalMissionRiskPerJump) || 0));
+  const scanBlockChance = Math.max(0, Math.min(1, Number(plannerSettings?.scanBlockChance) || 0));
+  const illegalExposure = plannerSettings?.illegalExposure || {};
+  const missionExposure = plannerSettings?.missionExposure || {};
 
   settingsOverview.innerHTML = [
     metricCard("Mode", DESKTOP_RUNTIME.isDesktop ? "Desktop" : "Web", DESKTOP_RUNTIME.isDesktop ? "Native pickers enabled" : "Runs in the browser"),
@@ -5290,6 +5129,57 @@ function renderSettings() {
         <button class="button-primary" data-settings-open="game" type="button">Choose game folder</button>
         <button class="button-secondary" data-settings-clear="game" type="button">Use automatic path</button>
       </div>
+    </article>
+  `;
+
+  settingsPlanner.innerHTML = `
+    <article class="settings-card">
+      <div class="settings-card-head">
+        <div>
+          <h3>Automatic route cost</h3>
+          <p>The planner subtracts this from every jump, including repositioning to the route start.</p>
+        </div>
+        <span class="settings-state ${operatingCostPerJump > 0 ? "is-ok" : "is-warning"}">${operatingCostPerJump > 0 ? `${formatNumber(operatingCostPerJump)} cr / jump` : "No recurring cost found"}</span>
+      </div>
+      <div class="settings-list">
+        <div class="settings-row">
+          <span>Total automatic cost</span>
+          <strong>${formatCredits(operatingCostPerJump)}</strong>
+        </div>
+        <div class="settings-row">
+          <span>Salary / jump</span>
+          <strong>${formatCredits(salaryPerJump)}</strong>
+        </div>
+        <div class="settings-row">
+          <span>Mortgage / jump</span>
+          <strong>${formatCredits(debtPerJump)}</strong>
+        </div>
+        <div class="settings-row">
+          <span>Illegal outfit risk / jump</span>
+          <strong>${formatCredits(illegalOutfitRiskPerJump)}</strong>
+        </div>
+        <div class="settings-row">
+          <span>Illegal mission risk / jump</span>
+          <strong>${formatCredits(illegalMissionRiskPerJump)}</strong>
+        </div>
+        <div class="settings-row">
+          <span>Illegal outfit exposure</span>
+          <strong>${illegalExposure?.totalIllegalFine ? formatCredits(illegalExposure.totalIllegalFine) : "None detected"}</strong>
+        </div>
+        <div class="settings-row">
+          <span>Active illegal mission fines</span>
+          <strong>${missionExposure?.totalIllegalFine ? formatCredits(missionExposure.totalIllegalFine) : "None detected"}</strong>
+        </div>
+        <div class="settings-row">
+          <span>Scan interference</span>
+          <strong>${formatOneDecimal(illegalExposure?.totalScanInterference || 0)} · blocks about ${formatNumber(Math.round(scanBlockChance * 100))}% of scans</strong>
+        </div>
+        <div class="settings-row">
+          <span>Cargo concealment</span>
+          <strong>${formatOneDecimal(illegalExposure?.totalCargoConcealment || 0)}</strong>
+        </div>
+      </div>
+      <div class="settings-note">This is a best-effort estimate from save data and official game data: salary, debt, active illegal missions, illegal outfits, and scan interference. Scripted or story-specific fines can still make the in-game result differ slightly.</div>
     </article>
   `;
 
@@ -6109,54 +5999,12 @@ function renderTracker() {
     tracker.innerHTML = `<div class="empty-state">Select a loop and press <span class="mono">Track loop</span> to start.</div>`;
     return;
   }
-
-  let body = "";
-  if (trackerState.stage === "positioning") {
-    body = `Fly to <strong>${escapeHtml(trackerState.origin)}</strong> to begin the loop.`;
-  } else if (trackerState.stage === "outbound-ready") {
-    body = `
-      You are at <strong>${escapeHtml(trackerState.origin)}</strong>. Buy
-      <strong>${escapeHtml(trackerState.outwardCommodity)}</strong> and launch.
-      <div class="route-actions">
-        <button class="button-inline" id="tracker-start-outbound" type="button">Cargo loaded</button>
-      </div>
-    `;
-  } else if (trackerState.stage === "outbound") {
-    body = `Outbound leg to <strong>${escapeHtml(trackerState.destination)}</strong> with <strong>${escapeHtml(trackerState.outwardCommodity)}</strong>.`;
-  } else if (trackerState.stage === "return-ready") {
-    body = `
-      You reached <strong>${escapeHtml(trackerState.destination)}</strong>. Sell
-      <strong>${escapeHtml(trackerState.outwardCommodity)}</strong>, buy
-      <strong>${escapeHtml(trackerState.inboundCommodity)}</strong>, and depart.
-      <div class="route-actions">
-        <button class="button-inline" id="tracker-start-return" type="button">Return cargo loaded</button>
-      </div>
-    `;
-  } else if (trackerState.stage === "return") {
-    body = `Return leg to <strong>${escapeHtml(trackerState.origin)}</strong> with <strong>${escapeHtml(trackerState.inboundCommodity)}</strong>.`;
-  } else if (trackerState.stage === "completed") {
-    body = `
-      Loop complete. Finished laps: <strong>${formatNumber(trackerState.laps || 0)}</strong>.
-      <div class="route-actions">
-        <button class="button-inline" id="tracker-next-lap" type="button">Start next lap</button>
-      </div>
-    `;
-  }
+  const stageMeta = getTrackerStageMeta(trackerState, currentSystem);
 
   tracker.innerHTML = `
-    <div class="tracker-line muted">Current system: <span class="mono">${escapeHtml(currentSystem)}</span></div>
-    <div class="tracker-body">${body}</div>
+    <div class="tracker-line muted">${escapeHtml(stageMeta?.stageLabel || "Tracking")} · <span class="mono">${escapeHtml(currentSystem)}</span></div>
+    <div class="tracker-body">${escapeHtml(stageMeta?.copy || `Current system: ${currentSystem}.`)}</div>
   `;
-
-  document.getElementById("tracker-start-outbound")?.addEventListener("click", () => {
-    setTrackerState({ ...trackerState, stage: "outbound" });
-  });
-  document.getElementById("tracker-start-return")?.addEventListener("click", () => {
-    setTrackerState({ ...trackerState, stage: "return" });
-  });
-  document.getElementById("tracker-next-lap")?.addEventListener("click", () => {
-    setTrackerState({ ...trackerState, stage: "outbound-ready" });
-  });
 }
 
 function renderMap() {
@@ -6239,10 +6087,10 @@ function renderMap() {
 
     metaText =
       selected.type === "directMarket"
-        ? `${selected.origin} → ${selected.destination} · ${selected.outward.commodity} · +${formatNumber(selected.outward.margin)} cr / t`
+        ? `${formatTradeLocation(selected.origin, selected.access)} → ${formatTradeLocation(selected.destination, selected.access)} · ${selected.outward.commodity} · ${formatNumber(selected.netProfit || selected.projectedProfit)} net credits`
         : selected.type === "carrySale"
-          ? `${selected.origin} → ${selected.destination} · ${selected.commodity} · ${formatNumber(selected.projectedProfit)} projected credits`
-          : `${selected.origin} → ${selected.destination} → ${selected.origin} · ${formatNumber(selected.projectedProfit)} credits per loop`;
+          ? `${formatTradeLocation(selected.origin, selected.access)} → ${formatTradeLocation(selected.destination, selected.access)} · ${selected.commodity} · ${formatNumber(selected.netProfit || selected.projectedProfit)} net credits`
+          : `${formatTradeLocation(selected.origin, selected.access)} → ${formatTradeLocation(selected.destination, selected.access)} → ${formatTradeLocation(selected.origin, selected.access)} · ${formatNumber(selected.netProfit || selected.projectedProfit)} net credits per loop`;
   }
 
   const pointMarkup = context.systems

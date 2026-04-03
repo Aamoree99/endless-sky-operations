@@ -55,8 +55,8 @@
               <section class="panel panel-tight">
                 <div class="panel-head">
                   <div>
-                    <h2>Direct markets</h2>
-                    <p>Best current price deltas from the system you are in.</p>
+                    <h2>Best trade runs</h2>
+                    <p>Known one-way runs, including the trip to the buying system.</p>
                   </div>
                 </div>
                 <div id="direct-markets" class="route-list"></div>
@@ -65,8 +65,8 @@
               <section class="panel panel-tight">
                 <div class="panel-head">
                   <div>
-                    <h2>Loops from here</h2>
-                    <p>Round trips that start from the current system.</p>
+                    <h2>Best trade loops</h2>
+                    <p>Known round trips ranked from your current position.</p>
                   </div>
                 </div>
                 <div id="local-loops" class="route-list"></div>
@@ -151,6 +151,7 @@
             </div>
             <div class="atlas-map-wrap">
               <svg id="atlas-map-svg" viewBox="0 0 1200 780" aria-label="Atlas map"></svg>
+              <svg id="atlas-map-overlay-svg" viewBox="0 0 1200 780" aria-hidden="true"></svg>
               <div id="atlas-map-planet" class="atlas-map-planet"></div>
               <div id="atlas-map-market" class="atlas-map-market"></div>
             </div>
@@ -212,6 +213,16 @@
               </div>
             </div>
             <div id="settings-game" class="settings-grid"></div>
+          </section>
+
+          <section class="panel panel-tight settings-section">
+            <div class="panel-head">
+              <div>
+                <h2>Route planning</h2>
+                <p>Planner costs that should be subtracted from every plotted jump.</p>
+              </div>
+            </div>
+            <div id="settings-planner" class="settings-grid"></div>
           </section>
         </div>
       </section>

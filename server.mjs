@@ -95,7 +95,14 @@ function erf(x) {
     1 -
     (((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t) *
       Math.exp(-absX * absX);
-  return sign * y;
+  const value = sign * y;
+  if (value >= 1 - 1e-12) {
+    return 1;
+  }
+  if (value <= -1 + 1e-12) {
+    return -1;
+  }
+  return Math.max(-1, Math.min(1, value));
 }
 
 async function fileExists(filePath) {
@@ -584,6 +591,9 @@ function parseMissionBlock(name, entries, sourcePath) {
     summary: "",
     minor: false,
     job: false,
+    illegalFine: 0,
+    stealth: false,
+    infiltrating: false,
   };
 
   const descriptionLines = [];
@@ -606,6 +616,12 @@ function parseMissionBlock(name, entries, sourcePath) {
         mission.minor = true;
       } else if (key === "job") {
         mission.job = true;
+      } else if (key === "illegal" && tokens[1]) {
+        mission.illegalFine = toNumber(tokens[1]);
+      } else if (key === "stealth") {
+        mission.stealth = true;
+      } else if (key === "infiltrating") {
+        mission.infiltrating = true;
       }
     }
 
@@ -1048,7 +1064,9 @@ function parseSave(text) {
     economy: {
       headers: [],
       supplies: {},
+      purchases: {},
     },
+    debts: [],
     credits: 0,
     score: 0,
     licenses: [],
@@ -1072,6 +1090,7 @@ function parseSave(text) {
   let shipContext = null;
   let section = null;
   let economyMode = null;
+  let currentDebt = null;
 
   const finalizeShip = () => {
     if (!currentShip) {
@@ -1148,6 +1167,14 @@ function parseSave(text) {
     dynamicType = null;
   };
 
+  const finalizeDebt = () => {
+    if (!currentDebt) {
+      return;
+    }
+    save.debts.push(currentDebt);
+    currentDebt = null;
+  };
+
   for (const rawLine of lines) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) {
@@ -1163,6 +1190,7 @@ function parseSave(text) {
       finalizeShip();
       finalizeMission();
       finalizeDynamic();
+      finalizeDebt();
 
       if (tokens[0] === "visited" && tokens[1]) {
         save.visitedSystems.push(tokens.slice(1).join(" "));
@@ -1417,6 +1445,26 @@ function parseSave(text) {
         save.credits = toNumber(tokens[1]);
       } else if (tokens[0] === "score") {
         save.score = toNumber(tokens[1]);
+      } else {
+        finalizeDebt();
+        currentDebt = {
+          kind: tokens[0],
+          name: tokens[1] || tokens[0],
+          principal: 0,
+          interest: 0,
+          term: 0,
+        };
+      }
+      continue;
+    }
+
+    if (section === "account" && depth === 2 && currentDebt) {
+      if (tokens[0] === "principal") {
+        currentDebt.principal = toNumber(tokens[1]);
+      } else if (tokens[0] === "interest") {
+        currentDebt.interest = toNumber(tokens[1]);
+      } else if (tokens[0] === "term") {
+        currentDebt.term = toNumber(tokens[1]);
       }
       continue;
     }
@@ -1462,12 +1510,22 @@ function parseSave(text) {
           ])
         );
       }
+      if (depth === 2 && economyMode === "purchases" && tokens.length >= 3) {
+        const systemName = tokens[0];
+        const commodity = tokens[1];
+        const tons = toNumber(tokens[2]);
+        if (!save.economy.purchases[systemName]) {
+          save.economy.purchases[systemName] = {};
+        }
+        save.economy.purchases[systemName][commodity] = tons;
+      }
     }
   }
 
   finalizeShip();
   finalizeMission();
   finalizeDynamic();
+  finalizeDebt();
 
   save.visitedSystems = uniqueStrings(save.visitedSystems);
   save.visitedPlanets = uniqueStrings(save.visitedPlanets);
@@ -1523,6 +1581,22 @@ function parseSave(text) {
   save.occupiedBunks = save.totalCrew + save.missionPassengers;
   save.freeBunks = Math.max(0, save.totalBunks - save.occupiedBunks);
   save.dailySalary = Math.max(0, save.totalCrew - 1) * 100;
+  save.dailyDebt = save.debts.reduce((sum, debt) => {
+    const principal = Math.max(0, Number(debt.principal) || 0);
+    const interest = Math.max(0, Number(debt.interest) || 0);
+    const term = Math.max(0, Number(debt.term) || 0);
+    if (!principal || !term) {
+      return sum;
+    }
+    if (!interest) {
+      return sum + Math.round(principal / term);
+    }
+    const denominator = 1 - Math.pow(1 + interest, -term);
+    if (!denominator) {
+      return sum;
+    }
+    return sum + Math.round((principal * interest) / denominator);
+  }, 0);
   delete save._logbookLastKind;
 
   return save;
@@ -1666,62 +1740,245 @@ function topCommodityDeltas(pricesFrom, pricesTo, limit = 3) {
     .slice(0, limit);
 }
 
-function buildDirectMarketsFromHere(save, prices, mapSystems, driveInfo, systemAccess) {
-  const origin = save.currentSystem;
-  const originPrices = prices[origin] || {};
-  const originDistances = bfsDistances(mapSystems, origin);
+function buildIllegalExposure(save, outfitsByName) {
+  const activeShips = save.ships.filter((ship) => !ship.parked);
+  const ships = activeShips.length ? activeShips : save.ships;
+  const byOutfit = new Map();
+  let totalIllegalFine = 0;
+  let totalScanInterference = 0;
+  let totalCargoConcealment = 0;
+  let totalOutfitScanOpacity = 0;
+  let totalCargoScanOpacity = 0;
+
+  for (const ship of ships) {
+    for (const [outfitName, count] of Object.entries(ship.outfits || {})) {
+      const outfit = outfitsByName[outfitName];
+      if (!outfit) {
+        continue;
+      }
+      const quantity = Math.max(0, Number(count) || 0);
+      const illegal = pickField(outfit.attributes, "illegal");
+      const scanInterference = pickField(outfit.attributes, "scan interference");
+      const scanConcealment = pickField(outfit.attributes, "scan concealment");
+      const outfitScanOpacity = pickField(outfit.attributes, "outfit scan opacity");
+      const cargoScanOpacity = pickField(outfit.attributes, "cargo scan opacity");
+      totalScanInterference += scanInterference * quantity;
+      totalCargoConcealment += scanConcealment * quantity;
+      totalOutfitScanOpacity += outfitScanOpacity * quantity;
+      totalCargoScanOpacity += cargoScanOpacity * quantity;
+      if (illegal <= 0) {
+        continue;
+      }
+      totalIllegalFine += illegal * quantity;
+      const current = byOutfit.get(outfitName) || {
+        name: outfitName,
+        count: 0,
+        fineEach: illegal,
+        totalFine: 0,
+      };
+      current.count += quantity;
+      current.totalFine += illegal * quantity;
+      byOutfit.set(outfitName, current);
+    }
+  }
+
+  return {
+    activeShipCount: ships.length,
+    totalIllegalFine,
+    totalScanInterference,
+    totalCargoConcealment,
+    totalOutfitScanOpacity,
+    totalCargoScanOpacity,
+    illegalOutfits: [...byOutfit.values()]
+      .sort((a, b) => b.totalFine - a.totalFine || a.name.localeCompare(b.name))
+      .slice(0, 12),
+  };
+}
+
+function buildMissionExposure(missions = []) {
+  const illegalMissions = [];
+  let totalIllegalFine = 0;
+  let cargoIllegalFine = 0;
+  let passengerIllegalFine = 0;
+  let illegalCargoTons = 0;
+  let illegalPassengers = 0;
+
+  for (const mission of missions) {
+    const illegalFine = Math.max(0, Number(mission.illegalFine) || 0);
+    const stealth = !!(mission.stealth || mission.infiltrating);
+    if (!illegalFine && !stealth) {
+      continue;
+    }
+    const cargoTons = Math.max(0, Number(mission.cargoTons) || 0);
+    const passengers = Math.max(0, Number(mission.passengers) || 0);
+    totalIllegalFine += illegalFine;
+    if (cargoTons > 0) {
+      cargoIllegalFine += illegalFine;
+      illegalCargoTons += cargoTons;
+    } else {
+      passengerIllegalFine += illegalFine;
+      illegalPassengers += passengers;
+    }
+    illegalMissions.push({
+      id: mission.id,
+      name: mission.name,
+      destination: mission.destination || null,
+      illegalFine,
+      cargoTons,
+      passengers,
+      stealth,
+    });
+  }
+
+  return {
+    totalIllegalFine,
+    cargoIllegalFine,
+    passengerIllegalFine,
+    illegalCargoTons,
+    illegalPassengers,
+    stealthMissionCount: illegalMissions.filter((mission) => mission.stealth).length,
+    illegalMissions: illegalMissions
+      .sort((a, b) => b.illegalFine - a.illegalFine || a.name.localeCompare(b.name))
+      .slice(0, 12),
+  };
+}
+
+function buildPlannerSettings(save, illegalExposure, missionExposure) {
+  const scanInterference = Math.max(0, Number(illegalExposure?.totalScanInterference) || 0);
+  const cargoConcealment = Math.max(0, Number(illegalExposure?.totalCargoConcealment) || 0);
+  const scanSuccessChance = 1 / (1 + scanInterference);
+  const scanBlockChance = 1 - scanSuccessChance;
+  const illegalCargoTons = Math.max(0, Number(missionExposure?.illegalCargoTons) || 0);
+  const cargoVisibleShare = illegalCargoTons
+    ? Math.max(0, illegalCargoTons - cargoConcealment) / illegalCargoTons
+    : 0;
+  const salaryPerJump = Math.max(0, Number(save?.dailySalary) || 0);
+  const debtPerJump = Math.max(0, Number(save?.dailyDebt) || 0);
+  const illegalOutfitRiskPerJump = Math.round(
+    Math.max(0, Number(illegalExposure?.totalIllegalFine) || 0) * scanSuccessChance
+  );
+  const illegalMissionRiskPerJump = Math.round(
+    Math.max(0, Number(missionExposure?.passengerIllegalFine) || 0) * scanSuccessChance +
+      Math.max(0, Number(missionExposure?.cargoIllegalFine) || 0) * scanSuccessChance * cargoVisibleShare
+  );
+  const operatingCostPerJump =
+    salaryPerJump + debtPerJump + illegalOutfitRiskPerJump + illegalMissionRiskPerJump;
+
+  return {
+    operatingCostPerJump,
+    estimated: true,
+    salaryPerJump,
+    debtPerJump,
+    illegalOutfitRiskPerJump,
+    illegalMissionRiskPerJump,
+    scanSuccessChance,
+    scanBlockChance,
+    cargoVisibleShare,
+    illegalExposure,
+    missionExposure,
+  };
+}
+
+function applyRouteEconomics(grossProfit, jumpCount, accessPenalty, planning, effectiveJumps = jumpCount) {
+  const jumps = Math.max(1, Number(jumpCount) || 0);
+  const routeJumps = Math.max(1, Number(effectiveJumps) || jumps);
+  const operatingCostPerJump = planning?.operatingCostPerJump || 0;
+  const operatingCost = operatingCostPerJump * routeJumps;
+  const netProfit = grossProfit - operatingCost;
+  const grossPerJump = Math.round(grossProfit / jumps);
+  const netPerJump = Math.round(netProfit / routeJumps);
+  const grossPerDay = Math.round(grossProfit / routeJumps);
+  const netPerDay = Math.round(netProfit / routeJumps);
+  const weightedNetPerDay = Math.round(netPerDay * (accessPenalty || 1));
+  return {
+    operatingCostPerJump,
+    operatingCost,
+    netProfit,
+    grossPerJump,
+    netPerJump,
+    grossPerDay,
+    netPerDay,
+    weightedNetPerDay,
+  };
+}
+
+function buildDirectMarketsFromHere(save, prices, mapSystems, driveInfo, systemAccess, planning) {
+  const systems = Object.keys(prices);
+  const currentSystem = save.currentSystem;
+  const currentDistances = bfsDistances(mapSystems, currentSystem);
+  const maxLegJumps = Math.max(0, driveInfo.fullJumps);
   const routes = [];
 
-  for (const [destination, jumps] of Object.entries(originDistances)) {
-    if (destination === origin || jumps <= 0 || jumps > driveInfo.currentJumps) {
+  for (const origin of systems) {
+    const repositionJumps = currentDistances[origin];
+    if (repositionJumps === undefined) {
       continue;
     }
-    const destinationPrices = prices[destination];
-    if (!destinationPrices) {
-      continue;
-    }
+    const originPrices = prices[origin] || {};
+    const originDistances = bfsDistances(mapSystems, origin);
 
-    const topTrades = topCommodityDeltas(originPrices, destinationPrices, 3);
-    const best = topTrades[0];
-    if (!best) {
-      continue;
-    }
-    const access = combineRouteAccess([destination], systemAccess);
-    const projectedProfit = best.margin * save.tradeCargoCapacity;
-    const profitPerJump = Math.round(projectedProfit / jumps);
-    const weightedProfitPerJump = Math.round(profitPerJump * access.penalty);
-    const marginPerTonPerJump = Math.round((best.margin / jumps) * 10) / 10;
+    for (const [destination, jumps] of Object.entries(originDistances)) {
+      if (destination === origin || jumps <= 0 || jumps > maxLegJumps) {
+        continue;
+      }
+      const destinationPrices = prices[destination];
+      if (!destinationPrices) {
+        continue;
+      }
 
-    routes.push({
-      type: "directMarket",
-      origin,
-      destination,
-      jumps,
-      outward: best,
-      topTrades,
-       access,
-      tradeCapacity: save.tradeCargoCapacity,
-      projectedProfit,
-      profitPerJump,
-      weightedProfitPerJump,
-      marginPerTonPerJump,
-    });
+      const topTrades = topCommodityDeltas(originPrices, destinationPrices, 3);
+      const best = topTrades[0];
+      if (!best) {
+        continue;
+      }
+
+      const access = combineRouteAccess([origin, destination], systemAccess);
+      const grossProfit = best.margin * save.tradeCargoCapacity;
+      const travelJumps = repositionJumps + jumps;
+      const economics = applyRouteEconomics(grossProfit, jumps, access.penalty, planning, travelJumps);
+      if (economics.netProfit <= 0) {
+        continue;
+      }
+
+      routes.push({
+        type: "directMarket",
+        origin,
+        destination,
+        jumps,
+        repositionJumps,
+        travelJumps,
+        outward: best,
+        topTrades,
+        access,
+        tradeCapacity: save.tradeCargoCapacity,
+        projectedProfit: grossProfit,
+        operatingCost: economics.operatingCost,
+        operatingCostPerJump: economics.operatingCostPerJump,
+        netProfit: economics.netProfit,
+        profitPerJump: economics.grossPerJump,
+        netProfitPerJump: economics.netPerJump,
+        profitPerDayFromHere: economics.netPerDay,
+        weightedProfitPerDayFromHere: economics.weightedNetPerDay,
+        marginPerTonPerJump: Math.round((best.margin / Math.max(1, travelJumps)) * 10) / 10,
+      });
+    }
   }
 
   return pickRouteResults(
     routes,
     (a, b) =>
-      b.weightedProfitPerJump - a.weightedProfitPerJump ||
-      b.access.penalty - a.access.penalty ||
-      b.outward.margin - a.outward.margin ||
-      b.projectedProfit - a.projectedProfit,
+      b.weightedProfitPerDayFromHere - a.weightedProfitPerDayFromHere ||
+      a.repositionJumps - b.repositionJumps ||
+      b.netProfit - a.netProfit ||
+      b.outward.margin - a.outward.margin,
     (a, b) =>
-      b.outward.margin - a.outward.margin ||
-      b.projectedProfit - a.projectedProfit,
+      b.netProfit - a.netProfit ||
+      b.weightedProfitPerDayFromHere - a.weightedProfitPerDayFromHere ||
+      a.repositionJumps - b.repositionJumps,
   );
 }
 
-function buildCarrySales(save, prices, mapSystems, driveInfo, systemAccess) {
+function buildCarrySales(save, prices, mapSystems, driveInfo, systemAccess, planning) {
   const origin = save.currentSystem;
   const originDistances = bfsDistances(mapSystems, origin);
   const routes = [];
@@ -1744,7 +2001,10 @@ function buildCarrySales(save, prices, mapSystems, driveInfo, systemAccess) {
       }
       const access = combineRouteAccess([destination], systemAccess);
       const projectedProfit = Math.round(margin * tons);
-      const profitPerJump = Math.round((margin * tons) / jumps);
+      const economics = applyRouteEconomics(projectedProfit, jumps, access.penalty, planning, jumps);
+      if (economics.netProfit <= 0) {
+        continue;
+      }
       routes.push({
         type: "carrySale",
         origin,
@@ -1757,72 +2017,24 @@ function buildCarrySales(save, prices, mapSystems, driveInfo, systemAccess) {
         margin: Math.round(margin * 100) / 100,
         access,
         projectedProfit,
-        profitPerJump,
-        weightedProfitPerJump: Math.round(profitPerJump * access.penalty),
+        operatingCost: economics.operatingCost,
+        operatingCostPerJump: economics.operatingCostPerJump,
+        netProfit: economics.netProfit,
+        profitPerJump: economics.grossPerJump,
+        netProfitPerJump: economics.netPerJump,
+        weightedProfitPerJump: Math.round(economics.netPerJump * access.penalty),
       });
     }
   }
 
   return pickRouteResults(
     routes,
-    (a, b) => b.weightedProfitPerJump - a.weightedProfitPerJump || b.projectedProfit - a.projectedProfit,
-    (a, b) => b.profitPerJump - a.profitPerJump || b.projectedProfit - a.projectedProfit,
+    (a, b) => b.weightedProfitPerJump - a.weightedProfitPerJump || b.netProfit - a.netProfit,
+    (a, b) => b.netProfit - a.netProfit || b.weightedProfitPerJump - a.weightedProfitPerJump,
   );
 }
 
-function buildLoopsFromHere(save, prices, mapSystems, driveInfo, systemAccess) {
-  const origin = save.currentSystem;
-  const originPrices = prices[origin] || {};
-  const originDistances = bfsDistances(mapSystems, origin);
-  const loops = [];
-
-  for (const [destination, jumpsOut] of Object.entries(originDistances)) {
-    if (destination === origin || jumpsOut <= 0 || jumpsOut > driveInfo.currentJumps) {
-      continue;
-    }
-    const destinationPrices = prices[destination];
-    if (!destinationPrices) {
-      continue;
-    }
-    const outward = bestCommodity(originPrices, destinationPrices);
-    const jumpsBack = bfsDistances(mapSystems, destination)[origin];
-    const inbound = bestCommodity(destinationPrices, originPrices);
-    if (!outward || !inbound || jumpsBack === undefined || jumpsBack > driveInfo.currentJumps) {
-      continue;
-    }
-
-    const totalJumps = jumpsOut + jumpsBack;
-    const totalMargin = outward.margin + inbound.margin;
-    const projectedProfit = totalMargin * save.tradeCargoCapacity;
-    const access = combineRouteAccess([origin, destination], systemAccess);
-    const profitPerJump = Math.round(projectedProfit / totalJumps);
-    loops.push({
-      type: "loop",
-      origin,
-      destination,
-      outward,
-      inbound,
-      jumpsOut,
-      jumpsBack,
-      totalJumps,
-      totalMargin,
-      access,
-      projectedProfit,
-      profitPerJump,
-      weightedProfitPerJump: Math.round(profitPerJump * access.penalty),
-      cargoBasis: "trade capacity",
-      tradeCapacity: save.tradeCargoCapacity,
-    });
-  }
-
-  return pickRouteResults(
-    loops,
-    (a, b) => b.weightedProfitPerJump - a.weightedProfitPerJump || b.projectedProfit - a.projectedProfit,
-    (a, b) => b.profitPerJump - a.profitPerJump || b.projectedProfit - a.projectedProfit,
-  );
-}
-
-function buildReachableLoops(save, prices, mapSystems, driveInfo, systemAccess) {
+function buildLoopsFromHere(save, prices, mapSystems, driveInfo, systemAccess, planning) {
   const systems = Object.keys(prices);
   const currentSystem = save.currentSystem;
   const currentDistances = bfsDistances(mapSystems, currentSystem);
@@ -1854,11 +2066,13 @@ function buildReachableLoops(save, prices, mapSystems, driveInfo, systemAccess) 
 
       const totalJumps = jumpsOut + jumpsBack;
       const totalMargin = outward.margin + inbound.margin;
-      const projectedProfit = totalMargin * save.tradeCargoCapacity;
       const effectiveDays = totalJumps + repositionJumps;
       const access = combineRouteAccess([origin, destination], systemAccess);
-      const profitPerJump = Math.round(projectedProfit / totalJumps);
-      const profitPerDayFromHere = Math.round(projectedProfit / Math.max(1, effectiveDays));
+      const projectedProfit = totalMargin * save.tradeCargoCapacity;
+      const economics = applyRouteEconomics(projectedProfit, totalJumps, access.penalty, planning, effectiveDays);
+      if (economics.netProfit <= 0) {
+        continue;
+      }
       const candidate = {
         type: "loop",
         origin,
@@ -1873,10 +2087,13 @@ function buildReachableLoops(save, prices, mapSystems, driveInfo, systemAccess) 
         repositionJumps,
         effectiveDays,
         access,
-        profitPerJump,
-        weightedProfitPerJump: Math.round(profitPerJump * access.penalty),
-        profitPerDayFromHere,
-        weightedProfitPerDayFromHere: Math.round(profitPerDayFromHere * access.penalty),
+        operatingCost: economics.operatingCost,
+        operatingCostPerJump: economics.operatingCostPerJump,
+        netProfit: economics.netProfit,
+        profitPerJump: economics.grossPerJump,
+        netProfitPerJump: economics.netPerJump,
+        profitPerDayFromHere: economics.netPerDay,
+        weightedProfitPerDayFromHere: economics.weightedNetPerDay,
         cargoBasis: "trade capacity",
         tradeCapacity: save.tradeCargoCapacity,
       };
@@ -1899,12 +2116,16 @@ function buildReachableLoops(save, prices, mapSystems, driveInfo, systemAccess) 
     (a, b) =>
       b.weightedProfitPerDayFromHere - a.weightedProfitPerDayFromHere ||
       a.repositionJumps - b.repositionJumps ||
-      b.projectedProfit - a.projectedProfit,
+      b.netProfit - a.netProfit,
     (a, b) =>
       b.profitPerDayFromHere - a.profitPerDayFromHere ||
       a.repositionJumps - b.repositionJumps ||
-      b.projectedProfit - a.projectedProfit,
+      b.netProfit - a.netProfit,
   );
+}
+
+function buildReachableLoops(save, prices, mapSystems, driveInfo, systemAccess, planning) {
+  return buildLoopsFromHere(save, prices, mapSystems, driveInfo, systemAccess, planning);
 }
 
 function buildCargoSummary(save, localPrices) {
@@ -2448,7 +2669,10 @@ async function writeSavedFits(fits) {
 
 async function loadAppConfig() {
   await ensureDir(CACHE_DIR);
-  const defaultConfig = { recentPathOverride: "", gameRootOverride: "" };
+  const defaultConfig = {
+    recentPathOverride: "",
+    gameRootOverride: "",
+  };
   if (!(await fileExists(APP_CONFIG_PATH))) {
     await writeFile(APP_CONFIG_PATH, JSON.stringify(defaultConfig, null, 2), "utf8");
     return defaultConfig;
@@ -2773,6 +2997,9 @@ async function buildBootstrap() {
       presets: game?.presets || [],
       saved: savedFits,
     },
+    config: {
+      configPath: APP_CONFIG_PATH,
+    },
   };
 }
 
@@ -2869,6 +3096,35 @@ async function buildStatus() {
       },
       debugEditor: null,
       market: {
+        plannerSettings: {
+          operatingCostPerJump: 0,
+          estimated: true,
+          salaryPerJump: 0,
+          debtPerJump: 0,
+          illegalOutfitRiskPerJump: 0,
+          illegalMissionRiskPerJump: 0,
+          scanSuccessChance: 1,
+          scanBlockChance: 0,
+          cargoVisibleShare: 0,
+          illegalExposure: {
+            activeShipCount: 0,
+            totalIllegalFine: 0,
+            totalScanInterference: 0,
+            totalCargoConcealment: 0,
+            totalOutfitScanOpacity: 0,
+            totalCargoScanOpacity: 0,
+            illegalOutfits: [],
+          },
+          missionExposure: {
+            totalIllegalFine: 0,
+            cargoIllegalFine: 0,
+            passengerIllegalFine: 0,
+            illegalCargoTons: 0,
+            illegalPassengers: 0,
+            stealthMissionCount: 0,
+            illegalMissions: [],
+          },
+        },
         localPrices: {},
         cargoSummary: [],
         planner: {
@@ -2891,6 +3147,7 @@ async function buildStatus() {
   const currentSystemData = game.mapSystems[save.currentSystem] || null;
   const shipsByName = Object.fromEntries(game.ships.map((ship) => [ship.name, ship]));
   const outfitsByName = Object.fromEntries(game.outfits.map((outfit) => [outfit.name, outfit]));
+  const illegalExposure = buildIllegalExposure(save, outfitsByName);
   const missionsById = Object.fromEntries((game.missions || []).map((mission) => [mission.id, mission]));
   const missionsByName = Object.fromEntries((game.missions || []).map((mission) => [mission.name, mission]));
   const basePlanets = buildPlanetCatalog(game.planets, game.saleGroups);
@@ -2923,8 +3180,13 @@ async function buildStatus() {
       description: meta?.description || "",
       summary: meta?.summary || "",
       sourcePath: meta?.sourcePath || null,
+      illegalFine: meta?.illegalFine || 0,
+      stealth: !!meta?.stealth,
+      infiltrating: !!meta?.infiltrating,
     };
   });
+  const missionExposure = buildMissionExposure(missionEntries);
+  const plannerSettings = buildPlannerSettings(save, illegalExposure, missionExposure);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -3046,6 +3308,7 @@ async function buildStatus() {
       },
     },
     market: {
+      plannerSettings,
       localPrices,
       cargoSummary,
       planner: {
@@ -3054,11 +3317,12 @@ async function buildStatus() {
           prices,
           game.mapSystems,
           drive,
-          systemAccess
+          systemAccess,
+          plannerSettings
         ),
-        carrySales: buildCarrySales(save, prices, game.mapSystems, drive, systemAccess),
-        loopsFromHere: buildLoopsFromHere(save, prices, game.mapSystems, drive, systemAccess),
-        reachableLoops: buildReachableLoops(save, prices, game.mapSystems, drive, systemAccess),
+        carrySales: buildCarrySales(save, prices, game.mapSystems, drive, systemAccess, plannerSettings),
+        loopsFromHere: buildLoopsFromHere(save, prices, game.mapSystems, drive, systemAccess, plannerSettings),
+        reachableLoops: buildReachableLoops(save, prices, game.mapSystems, drive, systemAccess, plannerSettings),
       },
     },
   };
@@ -3590,7 +3854,6 @@ const server = createServer(async (request, response) => {
       const nextGameRoot = Object.prototype.hasOwnProperty.call(payload || {}, "gameRootOverride")
         ? String(payload?.gameRootOverride || "").trim()
         : null;
-
       const updates = {};
 
       if (nextRecentPath !== null) {
@@ -3636,7 +3899,9 @@ const server = createServer(async (request, response) => {
       }
 
       await writeAppConfig(updates);
-      gameDataPromise = null;
+      if (Object.prototype.hasOwnProperty.call(updates, "gameRootOverride")) {
+        gameDataPromise = null;
+      }
       json(
         response,
         {
