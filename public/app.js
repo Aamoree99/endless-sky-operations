@@ -607,6 +607,7 @@ const fitterController = createFitterController({
     formatTwoDecimals,
     formatRemaining,
     formatDuration,
+    formatSaleLocation,
   },
   selectors: {
     getShipDefinition,

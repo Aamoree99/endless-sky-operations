@@ -56,6 +56,7 @@ export function createFitterController({ state, dom, helpers, selectors, actions
     formatTwoDecimals,
     formatRemaining,
     formatDuration,
+    formatSaleLocation,
   } = helpers;
   const {
     getShipDefinition,

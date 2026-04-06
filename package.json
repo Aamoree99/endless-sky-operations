@@ -1,6 +1,6 @@
 {
   "name": "endless-sky-trade-app",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "description": "Local Endless Sky planner, fitter, wiki, and save-aware desktop utility.",
