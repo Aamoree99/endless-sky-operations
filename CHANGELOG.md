@@ -1,13 +1,5 @@
 # Changelog
 
-## v0.3.1
-
-### Fixed
-- Fitter no longer crashes on startup because `formatSaleLocation` is now wired correctly after the v0.3 modular refactor.
-
-### Notes
-- This is a focused stability release for the post-refactor desktop build.
-
 ## v0.3.0
 
 ### Added
