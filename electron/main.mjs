@@ -134,6 +134,30 @@ ipcMain.handle("desktop:pick-game-root", async () => {
   return result.filePaths[0];
 });
 
+ipcMain.handle("desktop:pick-config-import-path", async () => {
+  const result = await dialog.showOpenDialog({
+    title: "Import app config",
+    properties: ["openFile"],
+    filters: [{ name: "JSON Files", extensions: ["json"] }],
+  });
+  if (result.canceled || !result.filePaths[0]) {
+    return null;
+  }
+  return result.filePaths[0];
+});
+
+ipcMain.handle("desktop:pick-config-export-path", async () => {
+  const result = await dialog.showSaveDialog({
+    title: "Export app config",
+    defaultPath: "endless-sky-operations-config.json",
+    filters: [{ name: "JSON Files", extensions: ["json"] }],
+  });
+  if (result.canceled || !result.filePath) {
+    return null;
+  }
+  return result.filePath;
+});
+
 app.whenReady().then(async () => {
   await createWindow();
   app.on("activate", async () => {

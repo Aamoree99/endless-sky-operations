@@ -24,14 +24,17 @@ export function getRouteAccessLabel(access) {
 
 export function getRouteRiskBadges(route, plannerSettings) {
   const badges = [];
-  const illegalRisk =
-    Math.max(0, Number(plannerSettings?.illegalOutfitRiskPerJump) || 0) +
-    Math.max(0, Number(plannerSettings?.illegalMissionRiskPerJump) || 0);
+  const illegalOutfitRisk = Math.max(0, Number(plannerSettings?.illegalOutfitRiskPerJump) || 0);
+  const illegalMissionRisk = Math.max(0, Number(plannerSettings?.illegalMissionRiskPerJump) || 0);
+  const stealthMissionCount = Math.max(
+    0,
+    Number(plannerSettings?.missionExposure?.stealthMissionCount) || 0
+  );
 
   if (route.access?.status === "open") {
     badges.push({ tone: "buyable", label: "Open landing" });
   } else if (route.access?.status === "gated") {
-    badges.push({ tone: "owned", label: "Reputation gate" });
+    badges.push({ tone: "owned", label: "Rep gate" });
   } else if (route.access?.status === "unfriendly") {
     badges.push({ tone: "owned", label: "Unfriendly space" });
   } else if (route.access?.status === "unknown") {
@@ -40,11 +43,18 @@ export function getRouteRiskBadges(route, plannerSettings) {
     badges.push({ tone: "owned", label: "Landing blocked" });
   }
 
-  badges.push(
-    illegalRisk > 0
-      ? { tone: "owned", label: "Scan risk" }
-      : { tone: "buyable", label: "Legal route" }
-  );
+  if (illegalOutfitRisk > 0) {
+    badges.push({ tone: "owned", label: "Illegal outfits" });
+  }
+  if (illegalMissionRisk > 0) {
+    badges.push({
+      tone: stealthMissionCount > 0 ? "owned" : "warn",
+      label: stealthMissionCount > 0 ? "Stealth mission" : "Illegal mission",
+    });
+  }
+  if (illegalOutfitRisk <= 0 && illegalMissionRisk <= 0) {
+    badges.push({ tone: "buyable", label: "Legal route" });
+  }
 
   return badges;
 }

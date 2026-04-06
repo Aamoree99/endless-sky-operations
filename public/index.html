@@ -51,6 +51,16 @@
           <div class="planner-main">
             <div id="active-route-card" class="active-route-card"></div>
 
+            <section class="panel panel-tight planner-controls-panel">
+              <div class="panel-head">
+                <div>
+                  <h2>Trade controls</h2>
+                  <p>Filter and rank known routes before committing to a run.</p>
+                </div>
+              </div>
+              <div id="planner-controls" class="planner-controls"></div>
+            </section>
+
             <div class="planner-route-grid">
               <section class="panel panel-tight">
                 <div class="panel-head">
@@ -198,6 +208,16 @@
           <section class="panel panel-tight settings-section">
             <div class="panel-head">
               <div>
+                <h2>Desktop</h2>
+                <p>App version, local config, and desktop-only actions.</p>
+              </div>
+            </div>
+            <div id="settings-desktop" class="settings-grid"></div>
+          </section>
+
+          <section class="panel panel-tight settings-section">
+            <div class="panel-head">
+              <div>
                 <h2>Save discovery</h2>
                 <p>Choose which <code>recent.txt</code> the app should use when automatic detection is wrong.</p>
               </div>
@@ -239,6 +259,10 @@
             <div id="debug-editor-warning" class="debug-warning-box"></div>
             <div id="debug-editor-settings" class="debug-settings"></div>
             <div id="debug-editor-status" class="debug-status-box" hidden></div>
+            <div class="debug-header-sidecars">
+              <div id="debug-backups" class="debug-sidecard"></div>
+              <div id="debug-history" class="debug-sidecard"></div>
+            </div>
           </section>
 
           <div class="debug-editor-grid">
@@ -271,6 +295,16 @@
               </div>
               <div id="debug-dangerous-editor" class="debug-editor-section"></div>
             </section>
+
+            <section class="panel panel-tight">
+              <div class="panel-head">
+                <div>
+                  <h2>Extreme</h2>
+                  <p>Raw save flags and conditions. Story damage is easy here.</p>
+                </div>
+              </div>
+              <div id="debug-extreme-editor" class="debug-editor-section"></div>
+            </section>
           </div>
         </div>
       </section>
@@ -295,6 +329,26 @@
               </div>
             </div>
             <div id="cargo-summary" class="table-wrap"></div>
+          </section>
+
+          <section class="panel panel-tight">
+            <div class="panel-head">
+              <div>
+                <h2>Fleet summary</h2>
+                <p>Totals and group-level checks for the current commander.</p>
+              </div>
+            </div>
+            <div id="fleet-overview" class="fleet-overview-grid"></div>
+          </section>
+
+          <section class="panel panel-tight">
+            <div class="panel-head">
+              <div>
+                <h2>Fleet groups</h2>
+                <p>Grouped hulls, fit drift, and subgroup totals.</p>
+              </div>
+            </div>
+            <div id="fleet-groups" class="fleet-group-grid"></div>
           </section>
 
           <section class="panel panel-tight">

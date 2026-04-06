@@ -1,86 +1,120 @@
 # Endless Sky Operations
 
-[Download the latest build](https://github.com/Aamoree99/endless-sky-operations/releases/latest)
+A local desktop companion for **Endless Sky** that reads your installed game data and your current save to help with planning, trading, fleet management, and fitting.
 
+Instead of jumping between the game, wiki pages, notes, and spreadsheets, you get one local tool with:
+- trade route planning
+- live system and market views
+- fleet and cargo overview
+- ship fitting tools
+- spoiler-safe reference pages based on your actual progress
+
+[Download the latest build](https://github.com/Aamoree99/endless-sky-operations/releases/latest)  
 [Release notes](https://github.com/Aamoree99/endless-sky-operations/blob/main/CHANGELOG.md)
 
-Local desktop companion for **Endless Sky**.
+## Why use it
 
-It reads your installed game data and your current save, then gives you:
-- trade route planning
-- a live system map
-- fleet and cargo overview
-- a ship fitter
-- spoiler-safe wiki and logbook views
+**Endless Sky Operations** is meant for players who want better visibility into their current run without depending on online tools or manually tracking everything themselves.
 
-## What you download
+It uses your local Endless Sky installation and your current save to show information that is relevant to the run you are actually playing.
 
-The releases page is the main download point.
+Key goals:
+- **local-first**: no online dependency at runtime
+- **save-aware**: uses your current save state instead of generic static data only
+- **practical**: focused on planning and decision support, not just browsing data
+- **spoiler-safe**: wiki and logbook views are limited to what your save has already revealed
 
-- `macOS`: `.dmg` and `.zip`
-- `Windows`: installer `.exe` and portable `.exe`
+## What it can do
 
-The app starts its own local backend internally. You do not need to run Node, manage a port, or stop background processes after closing the app.
+### Planner
+Find direct trade deltas, compare round trips, track routes, and preview route maps.
 
-## What it uses
+### Map
+Browse systems, planets, prices, landing targets, shipyards, outfitters, and local stock based on your current game data.
 
-Local Endless Sky files only:
-- game data from the installed Endless Sky folder
+### Wiki
+Read spoiler-safe lore and reference pages built from content already opened in your current save.
+
+### Fleet
+Inspect your fleet, cargo, mission occupancy, standings, and licenses in one place.
+
+### Fitter
+Plan ships and outfits using your local official game data.
+
+### Settings
+Configure the detected Endless Sky installation path and save tracking if auto-detection fails.
+
+## What it reads
+
+The app uses **local Endless Sky files only**:
+- game data from your installed Endless Sky folder
 - save state from `recent.txt` and the active save file it points to
 
-No GitHub wiki or online game data is required at runtime.
+It does **not** require GitHub wiki access or online game data during runtime.
 
-## Main pages
+## Download
 
-- `Planner`  
-  Direct market deltas, round trips, route tracking, and route map previews.
+The main download point is the Releases page.
 
-- `Map`  
-  Systems, planets, prices, landing targets, shipyards, outfitters, and live local stock.
+Available package formats:
+- **macOS**: `.dmg` and `.zip`
+- **Windows**: installer `.exe` and portable `.exe`
 
-- `Wiki`  
-  Spoiler-safe lore and reference pages built from what is already opened in the current save.
+The app starts its own local backend internally. You do not need to run Node manually, manage ports, or clean up background services after closing it.
 
-- `Fleet`  
-  Current roster, cargo state, mission occupancy, standings, and licenses.
+## Quick start
 
-- `Fitter`  
-  Ship and outfit planning based on the official local game data.
+1. Download the latest release for your platform.
+2. Launch the app.
+3. In most cases, the app will find your Endless Sky installation and current save automatically.
+4. If detection fails, open **Settings** and set:
+   - the path to `recent.txt`
+   - the Endless Sky installation folder
 
-- `Settings`  
-  Local configuration for `recent.txt` and the Endless Sky installation folder.
-
-## Setup
-
-In the normal case, the app finds everything automatically.
+## Auto-detection paths
 
 Default `recent.txt` paths:
-- `macOS`: `~/Library/Application Support/endless-sky/recent.txt`
-- `Windows`: `%APPDATA%/endless-sky/recent.txt`
-- `Linux`: `~/.local/share/endless-sky/recent.txt` with fallback to `~/.config/endless-sky/recent.txt`
+- **macOS**: `~/Library/Application Support/endless-sky/recent.txt`
+- **Windows**: `%APPDATA%/endless-sky/recent.txt`
+- **Linux**: `~/.local/share/endless-sky/recent.txt`
 
-If automatic detection fails, open `Settings` and set:
-- the `recent.txt` path
-- the Endless Sky game folder
+Linux fallback:
+- `~/.config/endless-sky/recent.txt`
 
-## Accuracy note
+## Accuracy notes
 
-Most values are rebuilt from the current save and the official game data, but a few numbers can still differ slightly from what you see in-game.
+Most values are rebuilt from your current save and the official game data, but some numbers may still differ slightly from what you see in-game.
 
-Typical reasons:
-- the app and the game are looking at different save snapshots
-- the save on disk is slightly behind what is currently open in the game
-- some values are reconstructed from economy state instead of copied from UI text
-- the game may round or display a value a little differently
+Common reasons:
+- the app and the game are reading different save snapshots
+- the save file on disk is slightly behind your current in-game state
+- some values are reconstructed from economy state rather than copied from UI text
+- Endless Sky may round or display some values differently
+
+## Who this is for
+
+This tool is especially useful if you:
+- trade regularly and want faster route evaluation
+- manage a growing fleet and want a clearer overview
+- compare ship and outfit options outside the in-game UI
+- want reference tools without opening external wiki pages
+- prefer local tools over browser-based helpers
 
 ## Development
 
+Install dependencies:
+
 ```bash
 npm install
+```
+
+Run the desktop app in development:
+
+```bash
 npm run desktop
 ```
 
-For distributable packages:
+Build distributable packages:
 
 ```bash
 npm run dist
@@ -88,10 +122,9 @@ npm run dist
 
 ## Local config
 
-The app keeps local overrides in:
-
-- `cache/app-config.json` during normal repo development
-- the platform app-data folder in the packaged desktop build
+The app stores local overrides in:
+- `cache/app-config.json` during repository development
+- the platform app-data folder in packaged desktop builds
 
 Example:
 
@@ -101,3 +134,13 @@ Example:
   "gameRootOverride": "/custom/path/to/Endless Sky"
 }
 ```
+
+## Project status
+
+This is an actively evolving companion app. Feedback on usability, missing workflows, and incorrect data reconstruction is especially useful.
+
+If something looks wrong, open an issue with:
+- your platform
+- what page you were using
+- what value looked incorrect
+- what you expected to see

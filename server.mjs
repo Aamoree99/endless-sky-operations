@@ -12,6 +12,7 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 const CACHE_DIR = process.env.ENDLESS_SKY_APP_CACHE_DIR || path.join(__dirname, "cache");
 const FITS_PATH = path.join(CACHE_DIR, "user-fits.json");
 const APP_CONFIG_PATH = path.join(CACHE_DIR, "app-config.json");
+const PACKAGE_JSON_PATH = path.join(__dirname, "package.json");
 const PORT = Number(process.env.PORT || 41783);
 function getGameRootCandidates() {
   const home = process.env.HOME || process.env.USERPROFILE || "";
@@ -56,9 +57,32 @@ function expandGameRootCandidate(candidate) {
 const POLL_SECONDS = 5;
 const PRICE_LIMIT = 20000;
 const TOP_ROUTE_COUNT = 5;
+const STEALTH_PROXY_CARGO_FINE = 40000;
+const STEALTH_PROXY_PASSENGER_FINE = 75000;
 const execFileAsync = promisify(execFile);
 
 let gameDataPromise = null;
+let appMetaPromise = null;
+
+async function loadAppMeta() {
+  if (!appMetaPromise) {
+    appMetaPromise = readFile(PACKAGE_JSON_PATH, "utf8")
+      .then((raw) => {
+        const parsed = JSON.parse(raw);
+        return {
+          name: String(parsed?.name || "endless-sky-trade-app"),
+          productName: String(parsed?.build?.productName || parsed?.name || "Endless Sky Operations"),
+          version: String(parsed?.version || "0.0.0"),
+        };
+      })
+      .catch(() => ({
+        name: "endless-sky-trade-app",
+        productName: "Endless Sky Operations",
+        version: "0.0.0",
+      }));
+  }
+  return appMetaPromise;
+}
 
 function tokenize(line) {
   const matches = line.match(/"[^"]*"|`[^`]*`|\S+/g) || [];
@@ -1117,8 +1141,11 @@ function parseSave(text) {
       const hasPlanetChanges =
         currentDynamic.shipyardClear ||
         currentDynamic.outfitterClear ||
+        currentDynamic.spaceportClear ||
         currentDynamic.shipyards.length ||
         currentDynamic.outfitters.length ||
+        currentDynamic.shipyardRemovals.length ||
+        currentDynamic.outfitterRemovals.length ||
         currentDynamic.requiredReputation !== null ||
         currentDynamic.security !== null ||
         currentDynamic.descriptions.length ||
@@ -1132,8 +1159,11 @@ function parseSave(text) {
         name: currentDynamic.name,
         shipyardClear: false,
         outfitterClear: false,
+        spaceportClear: false,
         shipyards: [],
         outfitters: [],
+        shipyardRemovals: [],
+        outfitterRemovals: [],
         requiredReputation: null,
         security: null,
         descriptions: [],
@@ -1141,8 +1171,11 @@ function parseSave(text) {
       };
       existing.shipyardClear = existing.shipyardClear || currentDynamic.shipyardClear;
       existing.outfitterClear = existing.outfitterClear || currentDynamic.outfitterClear;
+      existing.spaceportClear = existing.spaceportClear || currentDynamic.spaceportClear;
       existing.shipyards.push(...currentDynamic.shipyards);
       existing.outfitters.push(...currentDynamic.outfitters);
+      existing.shipyardRemovals.push(...currentDynamic.shipyardRemovals);
+      existing.outfitterRemovals.push(...currentDynamic.outfitterRemovals);
       if (currentDynamic.requiredReputation !== null) {
         existing.requiredReputation = currentDynamic.requiredReputation;
       }
@@ -1275,8 +1308,11 @@ function parseSave(text) {
         depth: 1,
         shipyardClear: false,
         outfitterClear: false,
+        spaceportClear: false,
         shipyards: [],
         outfitters: [],
+        shipyardRemovals: [],
+        outfitterRemovals: [],
         requiredReputation: null,
         security: null,
         descriptions: [],
@@ -1328,6 +1364,20 @@ function parseSave(text) {
           currentDynamic.shipyardClear = true;
         } else if (tokens[0] === "outfitter" && tokens[1] === "clear") {
           currentDynamic.outfitterClear = true;
+        } else if (tokens[0] === "remove" && tokens[1] === "shipyard") {
+          if (tokens[2]) {
+            currentDynamic.shipyardRemovals.push(tokens[2]);
+          } else {
+            currentDynamic.shipyardClear = true;
+          }
+        } else if (tokens[0] === "remove" && tokens[1] === "outfitter") {
+          if (tokens[2]) {
+            currentDynamic.outfitterRemovals.push(tokens[2]);
+          } else {
+            currentDynamic.outfitterClear = true;
+          }
+        } else if (tokens[0] === "remove" && tokens[1] === "spaceport") {
+          currentDynamic.spaceportClear = true;
         } else if (tokens[0] === "shipyard" && tokens[1]) {
           currentDynamic.shipyards.push(tokens[1]);
         } else if (tokens[0] === "outfitter" && tokens[1]) {
@@ -1693,8 +1743,26 @@ function computePrices(save, mapSystems) {
   return prices;
 }
 
-function bfsDistances(mapSystems, start) {
-  if (!start || !mapSystems[start]) {
+function buildRouteGraph(mapSystems, wormholes = []) {
+  const graph = {};
+  for (const [name, system] of Object.entries(mapSystems || {})) {
+    graph[name] = new Set(system.links || []);
+  }
+  for (const wormhole of wormholes || []) {
+    for (const link of wormhole.links || []) {
+      if (!graph[link.from] || !mapSystems[link.to]) {
+        continue;
+      }
+      graph[link.from].add(link.to);
+    }
+  }
+  return Object.fromEntries(
+    Object.entries(graph).map(([name, links]) => [name, [...links]])
+  );
+}
+
+function bfsDistances(routeGraph, start) {
+  if (!start || !routeGraph[start]) {
     return {};
   }
   const distances = { [start]: 0 };
@@ -1702,8 +1770,8 @@ function bfsDistances(mapSystems, start) {
   while (queue.length) {
     const current = queue.shift();
     const depth = distances[current];
-    for (const next of mapSystems[current].links || []) {
-      if (distances[next] !== undefined || !mapSystems[next]) {
+    for (const next of routeGraph[current] || []) {
+      if (distances[next] !== undefined || !routeGraph[next]) {
         continue;
       }
       distances[next] = depth + 1;
@@ -1798,8 +1866,11 @@ function buildIllegalExposure(save, outfitsByName) {
 function buildMissionExposure(missions = []) {
   const illegalMissions = [];
   let totalIllegalFine = 0;
+  let totalEffectiveFine = 0;
   let cargoIllegalFine = 0;
   let passengerIllegalFine = 0;
+  let cargoEffectiveFine = 0;
+  let passengerEffectiveFine = 0;
   let illegalCargoTons = 0;
   let illegalPassengers = 0;
 
@@ -1811,12 +1882,24 @@ function buildMissionExposure(missions = []) {
     }
     const cargoTons = Math.max(0, Number(mission.cargoTons) || 0);
     const passengers = Math.max(0, Number(mission.passengers) || 0);
+    const effectiveFine =
+      illegalFine ||
+      (stealth
+        ? cargoTons > 0
+          ? STEALTH_PROXY_CARGO_FINE
+          : passengers > 0
+            ? STEALTH_PROXY_PASSENGER_FINE
+            : STEALTH_PROXY_CARGO_FINE
+        : 0);
     totalIllegalFine += illegalFine;
+    totalEffectiveFine += effectiveFine;
     if (cargoTons > 0) {
       cargoIllegalFine += illegalFine;
+      cargoEffectiveFine += effectiveFine;
       illegalCargoTons += cargoTons;
     } else {
       passengerIllegalFine += illegalFine;
+      passengerEffectiveFine += effectiveFine;
       illegalPassengers += passengers;
     }
     illegalMissions.push({
@@ -1824,6 +1907,7 @@ function buildMissionExposure(missions = []) {
       name: mission.name,
       destination: mission.destination || null,
       illegalFine,
+      effectiveFine,
       cargoTons,
       passengers,
       stealth,
@@ -1832,13 +1916,16 @@ function buildMissionExposure(missions = []) {
 
   return {
     totalIllegalFine,
+    totalEffectiveFine,
     cargoIllegalFine,
     passengerIllegalFine,
+    cargoEffectiveFine,
+    passengerEffectiveFine,
     illegalCargoTons,
     illegalPassengers,
     stealthMissionCount: illegalMissions.filter((mission) => mission.stealth).length,
     illegalMissions: illegalMissions
-      .sort((a, b) => b.illegalFine - a.illegalFine || a.name.localeCompare(b.name))
+      .sort((a, b) => b.effectiveFine - a.effectiveFine || a.name.localeCompare(b.name))
       .slice(0, 12),
   };
 }
@@ -1858,8 +1945,8 @@ function buildPlannerSettings(save, illegalExposure, missionExposure) {
     Math.max(0, Number(illegalExposure?.totalIllegalFine) || 0) * scanSuccessChance
   );
   const illegalMissionRiskPerJump = Math.round(
-    Math.max(0, Number(missionExposure?.passengerIllegalFine) || 0) * scanSuccessChance +
-      Math.max(0, Number(missionExposure?.cargoIllegalFine) || 0) * scanSuccessChance * cargoVisibleShare
+    Math.max(0, Number(missionExposure?.passengerEffectiveFine) || 0) * scanSuccessChance +
+      Math.max(0, Number(missionExposure?.cargoEffectiveFine) || 0) * scanSuccessChance * cargoVisibleShare
   );
   const operatingCostPerJump =
     salaryPerJump + debtPerJump + illegalOutfitRiskPerJump + illegalMissionRiskPerJump;
@@ -1902,10 +1989,10 @@ function applyRouteEconomics(grossProfit, jumpCount, accessPenalty, planning, ef
   };
 }
 
-function buildDirectMarketsFromHere(save, prices, mapSystems, driveInfo, systemAccess, planning) {
+function buildDirectMarketsFromHere(save, prices, routeGraph, driveInfo, systemAccess, planning) {
   const systems = Object.keys(prices);
   const currentSystem = save.currentSystem;
-  const currentDistances = bfsDistances(mapSystems, currentSystem);
+  const currentDistances = bfsDistances(routeGraph, currentSystem);
   const maxLegJumps = Math.max(0, driveInfo.fullJumps);
   const routes = [];
 
@@ -1915,7 +2002,7 @@ function buildDirectMarketsFromHere(save, prices, mapSystems, driveInfo, systemA
       continue;
     }
     const originPrices = prices[origin] || {};
-    const originDistances = bfsDistances(mapSystems, origin);
+    const originDistances = bfsDistances(routeGraph, origin);
 
     for (const [destination, jumps] of Object.entries(originDistances)) {
       if (destination === origin || jumps <= 0 || jumps > maxLegJumps) {
@@ -1978,9 +2065,9 @@ function buildDirectMarketsFromHere(save, prices, mapSystems, driveInfo, systemA
   );
 }
 
-function buildCarrySales(save, prices, mapSystems, driveInfo, systemAccess, planning) {
+function buildCarrySales(save, prices, routeGraph, driveInfo, systemAccess, planning) {
   const origin = save.currentSystem;
-  const originDistances = bfsDistances(mapSystems, origin);
+  const originDistances = bfsDistances(routeGraph, origin);
   const routes = [];
 
   for (const [commodity, tons] of Object.entries(save.cargo)) {
@@ -2034,10 +2121,10 @@ function buildCarrySales(save, prices, mapSystems, driveInfo, systemAccess, plan
   );
 }
 
-function buildLoopsFromHere(save, prices, mapSystems, driveInfo, systemAccess, planning) {
+function buildLoopsFromHere(save, prices, routeGraph, driveInfo, systemAccess, planning) {
   const systems = Object.keys(prices);
   const currentSystem = save.currentSystem;
-  const currentDistances = bfsDistances(mapSystems, currentSystem);
+  const currentDistances = bfsDistances(routeGraph, currentSystem);
   const maxLegJumps = Math.max(0, driveInfo.fullJumps);
   const loopMap = new Map();
 
@@ -2047,7 +2134,7 @@ function buildLoopsFromHere(save, prices, mapSystems, driveInfo, systemAccess, p
       continue;
     }
     const originPrices = prices[origin];
-    const originDistances = bfsDistances(mapSystems, origin);
+    const originDistances = bfsDistances(routeGraph, origin);
 
     for (const [destination, jumpsOut] of Object.entries(originDistances)) {
       if (destination === origin || jumpsOut <= 0 || jumpsOut > maxLegJumps) {
@@ -2058,7 +2145,7 @@ function buildLoopsFromHere(save, prices, mapSystems, driveInfo, systemAccess, p
         continue;
       }
       const outward = bestCommodity(originPrices, destinationPrices);
-      const jumpsBack = bfsDistances(mapSystems, destination)[origin];
+      const jumpsBack = bfsDistances(routeGraph, destination)[origin];
       const inbound = bestCommodity(destinationPrices, originPrices);
       if (!outward || !inbound || jumpsBack === undefined || jumpsBack > maxLegJumps) {
         continue;
@@ -2124,8 +2211,8 @@ function buildLoopsFromHere(save, prices, mapSystems, driveInfo, systemAccess, p
   );
 }
 
-function buildReachableLoops(save, prices, mapSystems, driveInfo, systemAccess, planning) {
-  return buildLoopsFromHere(save, prices, mapSystems, driveInfo, systemAccess, planning);
+function buildReachableLoops(save, prices, routeGraph, driveInfo, systemAccess, planning) {
+  return buildLoopsFromHere(save, prices, routeGraph, driveInfo, systemAccess, planning);
 }
 
 function buildCargoSummary(save, localPrices) {
@@ -2178,6 +2265,7 @@ function buildPlanetCatalog(planets, saleGroups, overrides = {}) {
     const override = overrides[planet.name] || null;
     let shipyardGroups = [...(planet.shipyards || [])];
     let outfitterGroups = [...(planet.outfitters || [])];
+    let spaceport = [...(planet.spaceport || [])];
 
     if (override?.shipyardClear) {
       shipyardGroups = [];
@@ -2185,11 +2273,25 @@ function buildPlanetCatalog(planets, saleGroups, overrides = {}) {
     if (override?.outfitterClear) {
       outfitterGroups = [];
     }
+    if (override?.spaceportClear) {
+      spaceport = [];
+    }
+    if (override?.shipyardRemovals?.length) {
+      const removed = new Set(override.shipyardRemovals);
+      shipyardGroups = shipyardGroups.filter((group) => !removed.has(group));
+    }
+    if (override?.outfitterRemovals?.length) {
+      const removed = new Set(override.outfitterRemovals);
+      outfitterGroups = outfitterGroups.filter((group) => !removed.has(group));
+    }
     if (override?.shipyards?.length) {
       shipyardGroups = uniqueStrings([...shipyardGroups, ...override.shipyards]);
     }
     if (override?.outfitters?.length) {
       outfitterGroups = uniqueStrings([...outfitterGroups, ...override.outfitters]);
+    }
+    if (override?.spaceport?.length) {
+      spaceport = override.spaceport;
     }
 
     const shipItems = uniqueStrings(
@@ -2202,7 +2304,7 @@ function buildPlanetCatalog(planets, saleGroups, overrides = {}) {
     return {
       ...planet,
       descriptions: override?.descriptions?.length ? override.descriptions : planet.descriptions,
-      spaceport: override?.spaceport?.length ? override.spaceport : planet.spaceport,
+      spaceport,
       requiredReputation:
         override?.requiredReputation !== null && override?.requiredReputation !== undefined
           ? override.requiredReputation
@@ -2222,8 +2324,11 @@ function buildPlanetCatalog(planets, saleGroups, overrides = {}) {
             present: true,
             shipyardClear: Boolean(override.shipyardClear),
             outfitterClear: Boolean(override.outfitterClear),
+            spaceportClear: Boolean(override.spaceportClear),
             shipyardAdds: [...(override.shipyards || [])],
             outfitterAdds: [...(override.outfitters || [])],
+            shipyardRemovals: [...(override.shipyardRemovals || [])],
+            outfitterRemovals: [...(override.outfitterRemovals || [])],
             requiredReputation:
               override.requiredReputation !== null && override.requiredReputation !== undefined
                 ? override.requiredReputation
@@ -2680,19 +2785,7 @@ async function loadAppConfig() {
   try {
     const raw = await readFile(APP_CONFIG_PATH, "utf8");
     const parsed = JSON.parse(raw);
-    return {
-      ...parsed,
-      recentPathOverride:
-        typeof parsed?.recentPathOverride === "string"
-          ? parsed.recentPathOverride
-          : typeof parsed?.savePathOverride === "string" && /recent\.txt$/i.test(parsed.savePathOverride)
-            ? parsed.savePathOverride
-            : "",
-      gameRootOverride:
-        typeof parsed?.gameRootOverride === "string"
-          ? parsed.gameRootOverride
-          : "",
-    };
+    return normalizeAppConfig(parsed);
   } catch {
     return defaultConfig;
   }
@@ -2701,7 +2794,38 @@ async function loadAppConfig() {
 async function writeAppConfig(config) {
   await ensureDir(CACHE_DIR);
   const current = await loadAppConfig();
-  await writeFile(APP_CONFIG_PATH, JSON.stringify({ ...current, ...config }, null, 2), "utf8");
+  await writeFile(APP_CONFIG_PATH, JSON.stringify(normalizeAppConfig({ ...current, ...config }), null, 2), "utf8");
+}
+
+function normalizeAppConfig(parsed) {
+  return {
+    recentPathOverride:
+      typeof parsed?.recentPathOverride === "string"
+        ? parsed.recentPathOverride
+        : typeof parsed?.savePathOverride === "string" && /recent\.txt$/i.test(parsed.savePathOverride)
+          ? parsed.savePathOverride
+          : "",
+    gameRootOverride:
+      typeof parsed?.gameRootOverride === "string"
+        ? parsed.gameRootOverride
+        : "",
+  };
+}
+
+async function exportAppConfig(targetPath) {
+  const config = await loadAppConfig();
+  await writeFile(targetPath, JSON.stringify(config, null, 2), "utf8");
+  return targetPath;
+}
+
+async function importAppConfig(sourcePath) {
+  const raw = await readFile(sourcePath, "utf8");
+  const parsed = JSON.parse(raw);
+  const normalized = normalizeAppConfig(parsed);
+  await ensureDir(CACHE_DIR);
+  await writeFile(APP_CONFIG_PATH, JSON.stringify(normalized, null, 2), "utf8");
+  gameDataPromise = null;
+  return normalized;
 }
 
 function getHomeDir() {
@@ -2952,6 +3076,7 @@ async function resolveGameData() {
 }
 
 async function buildBootstrap() {
+  const appMeta = await loadAppMeta();
   const gameState = await resolveGameData();
   const game = gameState.game;
   const savedFits = await loadSavedFits();
@@ -3000,10 +3125,12 @@ async function buildBootstrap() {
     config: {
       configPath: APP_CONFIG_PATH,
     },
+    app: appMeta,
   };
 }
 
 async function buildStatus() {
+  const appMeta = await loadAppMeta();
   const gameState = await resolveGameData();
   const game = gameState.game;
   const saveSelection = await resolveSaveSelection();
@@ -3134,6 +3261,7 @@ async function buildStatus() {
           reachableLoops: [],
         },
       },
+      app: appMeta,
     };
   }
   const savePath = saveSelection.selectedSavePath;
@@ -3187,6 +3315,8 @@ async function buildStatus() {
   });
   const missionExposure = buildMissionExposure(missionEntries);
   const plannerSettings = buildPlannerSettings(save, illegalExposure, missionExposure);
+  const saveBackups = await listSaveBackups(savePath);
+  const routeGraph = buildRouteGraph(game.mapSystems, game.wormholes);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -3270,6 +3400,7 @@ async function buildStatus() {
     },
     debugEditor: {
       savePath,
+      backups: saveBackups,
       safe: {
         credits: save.credits,
         currentSystem: save.currentSystem,
@@ -3304,6 +3435,8 @@ async function buildStatus() {
           requiredCrew: toNumber(ship.attributes["required crew"]),
           bunks: toNumber(ship.attributes.bunks),
         })),
+      },
+      extreme: {
         conditions: save.conditions,
       },
     },
@@ -3315,16 +3448,17 @@ async function buildStatus() {
         directMarketsFromHere: buildDirectMarketsFromHere(
           save,
           prices,
-          game.mapSystems,
+          routeGraph,
           drive,
           systemAccess,
           plannerSettings
         ),
-        carrySales: buildCarrySales(save, prices, game.mapSystems, drive, systemAccess, plannerSettings),
-        loopsFromHere: buildLoopsFromHere(save, prices, game.mapSystems, drive, systemAccess, plannerSettings),
-        reachableLoops: buildReachableLoops(save, prices, game.mapSystems, drive, systemAccess, plannerSettings),
+        carrySales: buildCarrySales(save, prices, routeGraph, drive, systemAccess, plannerSettings),
+        loopsFromHere: buildLoopsFromHere(save, prices, routeGraph, drive, systemAccess, plannerSettings),
+        reachableLoops: buildReachableLoops(save, prices, routeGraph, drive, systemAccess, plannerSettings),
       },
     },
+    app: appMeta,
   };
 }
 
@@ -3667,9 +3801,36 @@ async function createSaveBackup(savePath) {
   return backupPath;
 }
 
+async function listSaveBackups(savePath, limit = 12) {
+  const directory = path.dirname(savePath);
+  const parsed = path.parse(savePath);
+  const prefix = `${parsed.name}~~codex-backup-`;
+  const names = await readdir(directory);
+  const matches = [];
+  for (const name of names) {
+    if (!name.startsWith(prefix) || !name.endsWith(parsed.ext)) {
+      continue;
+    }
+    const fullPath = path.join(directory, name);
+    try {
+      const info = await stat(fullPath);
+      matches.push({
+        name,
+        path: fullPath,
+        updatedAt: info.mtime.toISOString(),
+        updatedAtMs: info.mtimeMs,
+      });
+    } catch {
+    }
+  }
+  return matches
+    .sort((left, right) => right.updatedAtMs - left.updatedAtMs)
+    .slice(0, limit);
+}
+
 async function applySaveEdits(savePath, payload) {
   const trackerOnlyTravelPatch =
-    payload?.source === "tracker" &&
+    ["tracker", "planner"].includes(payload?.source) &&
     Array.isArray(payload?.travelPlan) &&
     payload?.credits === undefined &&
     payload?.currentSystem === undefined &&
@@ -3843,6 +4004,36 @@ const server = createServer(async (request, response) => {
       const kind = browseKind === "directory" || browseKind === "game-root" ? "directory" : "file";
       const pickedPath = await openNativeSavePathPicker(kind);
       json(response, { ok: Boolean(pickedPath), cancelled: !pickedPath, path: pickedPath ? path.normalize(pickedPath) : null }, 200);
+      return;
+    }
+
+    if (requestUrl.pathname === "/api/app-config/export" && request.method === "POST") {
+      const payload = await readJsonBody(request);
+      const targetPath = String(payload?.path || "").trim();
+      if (!targetPath) {
+        json(response, { error: "A target path is required for config export." }, 400);
+        return;
+      }
+      const normalizedPath = path.normalize(targetPath);
+      await exportAppConfig(normalizedPath);
+      json(response, { ok: true, path: normalizedPath }, 200);
+      return;
+    }
+
+    if (requestUrl.pathname === "/api/app-config/import" && request.method === "POST") {
+      const payload = await readJsonBody(request);
+      const sourcePath = String(payload?.path || "").trim();
+      if (!sourcePath) {
+        json(response, { error: "A source path is required for config import." }, 400);
+        return;
+      }
+      const normalizedPath = path.normalize(sourcePath);
+      if (!(await fileExists(normalizedPath))) {
+        json(response, { error: "The selected config file was not found." }, 400);
+        return;
+      }
+      const config = await importAppConfig(normalizedPath);
+      json(response, { ok: true, path: normalizedPath, config }, 200);
       return;
     }
 

@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.3.0
+
+### Added
+- Trade operations controls for sorting, filtering, and setting course from planner routes.
+- Fleet group summaries with series-aware grouping and fit-drift detection.
+- Debug editor improvements including diff previews, backup/history views, and an extreme tier for raw conditions.
+- Desktop settings tools for config import/export and richer runtime metadata.
+
+### Improved
+- Planner routes now account for wormholes, landing targets, route risk labels, and automatic cost breakdowns.
+- Tracker flow now behaves like a fuller route state machine and keeps the travel plan in sync.
+- Wiki story/logbook views are more structured, with chains, timeline-style diary entries, and better mission summaries.
+- Map rendering between live and debug now shares the same projection and styling rules more consistently.
+- Trade price reconstruction now matches the game formula more closely and surfaces save/economy edge cases better.
+
+### Changed
+- The frontend was refactored into page and shared modules; the main app entry dropped from more than 6000 lines to under 900.
+- Planner, fleet, wiki, fitter, debug, settings, atlas, and route map rendering now hang off dedicated controllers.
+
+### Fixed
+- Planner pathfinding now includes wormhole edges instead of silently missing cross-cluster routes.
+- Planet override parsing now respects `remove`-style service changes for shipyards, outfitters, and spaceports.
+- Stealth-only mission risk no longer collapses to zero in automatic planner cost estimation.
+- Desktop runtime/config handling is more robust when save discovery partially succeeds.
+
 ## v0.2.0
 
 ### Added

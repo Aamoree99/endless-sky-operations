@@ -1,11 +1,25 @@
 import { firstCopyLine } from "./text-utils.js";
 
+function normalizeMissionLine(text) {
+  const line = String(text || "").trim();
+  if (!line) {
+    return "";
+  }
+  if (/^[a-z]/.test(line) && /^to\s+/i.test(line)) {
+    return `Travel ${line}.`;
+  }
+  if (!/[.!?]$/.test(line)) {
+    return `${line}.`;
+  }
+  return line;
+}
+
 export function humanizeMissionSummary(mission) {
   const direct =
     firstCopyLine(mission.summary, mission.description) ||
     "";
   if (direct) {
-    return direct;
+    return normalizeMissionLine(direct);
   }
 
   const bits = [];
@@ -72,4 +86,66 @@ export function humanizeWorldStateNotes(planet, base, override) {
     notes.push("The planet description has been replaced by story progress.");
   }
   return notes;
+}
+
+export function getMissionChainKey(mission) {
+  const name = String(mission?.name || "").trim();
+  const id = String(mission?.id || "").trim();
+  const sourcePath = String(mission?.sourcePath || "").trim();
+  const title = name || id;
+
+  if (title.includes(":")) {
+    const prefix = title.split(":")[0]?.trim();
+    if (prefix) {
+      return prefix;
+    }
+  }
+
+  if (sourcePath) {
+    const normalized = sourcePath.replace(/\\/g, "/");
+    const segments = normalized.split("/");
+    const file = segments[segments.length - 1] || "";
+    const stem = file.replace(/\.[^.]+$/, "").trim();
+    if (stem) {
+      return stem
+        .split(/\s+/)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(" ");
+    }
+  }
+
+  return title || "Mission";
+}
+
+export function humanizeMissionChainSummary(chain) {
+  const destinations = Array.from(new Set(chain.missions.map((mission) => mission.destination).filter(Boolean)));
+  const jobs = chain.missions.filter((mission) => mission.job).length;
+  const missions = chain.missions.length - jobs;
+  const bits = [];
+
+  if (chain.missions.length === 1 && chain.missions[0]?.shortCopy) {
+    return chain.missions[0].shortCopy;
+  }
+
+  if (missions > 0) {
+    bits.push(`${missions} mission${missions === 1 ? "" : "s"}`);
+  }
+  if (jobs > 0) {
+    bits.push(`${jobs} job${jobs === 1 ? "" : "s"}`);
+  }
+  if (destinations.length === 1) {
+    bits.push(`focused on ${destinations[0]}`);
+  } else if (destinations.length > 1) {
+    bits.push(`touching ${destinations.slice(0, 3).join(", ")}`);
+  }
+
+  return bits.length ? `${bits.join(" · ")}.` : "Active story beats in this chain.";
+}
+
+export function humanizeDiaryEntry(line) {
+  const text = String(line || "").trim();
+  if (!text) {
+    return "";
+  }
+  return normalizeMissionLine(text);
 }
