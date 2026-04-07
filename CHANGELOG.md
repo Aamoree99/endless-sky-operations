@@ -9,19 +9,30 @@
 - Profile-card image export for sharing builds outside the app.
 - Fleet rollout tools for applying the current fit to a whole ship group or normalizing a series.
 - Platform icon assets for macOS, Windows, and Linux builds.
+- Fleet rollout route planning: calculates the optimal path to outfitter stops for required ship upgrades using the shortest-path graph.
+- Outfitter route itinerary in the rollout modal: numbered stops with system name, jump count, and items to buy at each location.
+- Travel cost breakdown in rolling preview: daily crew salary × route jumps + 10% navigator commission.
+- In-game date advancement: applying a rollout now moves the save file date forward by the number of jumps in the planned route.
 
 ### Improved
 - Fitter header, fit actions, and saved-fit cards were redesigned to read more like a product UI and less like a debug panel.
 - Fleet groups now show rollout readiness and fit drift more clearly.
 - Share, import, and compare modals now scroll correctly in smaller windows and close on outside click.
 - Desktop branding now presents the app as `ES: Operations`.
+- Rollout modal header now shows separate **Outfit cost**, **Travel cost**, and **Total cost** pills alongside target cargo and jump stats.
+- Rollout modal shows a summary bar with ships selected for refit, salary/day, navigator fee rate, and total route jumps.
 
 ### Changed
 - macOS packaging now uses a proper app icon and display name while keeping the helper bundle naming valid.
 - Linux release packaging has been prepared in the release workflow.
+- Applying a fleet rollout now deducts the full economic cost (outfit purchases + travel expenses) from the player's credits.
+
+### Fixed
+- Outfit sale location lookup in rollout now correctly merges live `progressSaleLocations` from the wiki into the outfit definition so Hai, Remnant, and other faction outfitter stops are resolved correctly when building the route.
 
 ### Notes
 - This is a beta release. The main workflows are in place, but this cut is meant for real use and UI validation before a later stable pass.
+
 
 ## v0.3.0
 
