@@ -1,6 +1,6 @@
 {
   "name": "endless-sky-trade-app",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "Local Endless Sky planner, fitter, wiki, and save-aware desktop utility.",
@@ -19,7 +19,7 @@
   },
   "build": {
     "appId": "com.ilia.endlesssky.operations",
-    "productName": "Endless Sky Operations",
+    "productName": "ES Operations",
     "asar": false,
     "files": [
       "electron/**/*",
@@ -32,6 +32,10 @@
       "buildResources": "public"
     },
     "mac": {
+      "icon": "icons/mac/icon.icns",
+      "extendInfo": {
+        "CFBundleDisplayName": "ES: Operations"
+      },
       "category": "public.app-category.utilities",
       "target": [
         "dmg",
@@ -39,12 +43,14 @@
       ]
     },
     "win": {
+      "icon": "icons/win/icon.ico",
       "target": [
         "nsis",
         "portable"
       ]
     },
     "linux": {
+      "icon": "icons/png",
       "target": [
         "AppImage",
         "deb"

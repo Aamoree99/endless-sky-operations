@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Endless Sky Operations</title>
+    <title>ES: Operations</title>
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
@@ -452,10 +452,6 @@
                     </select>
                   </div>
                 </label>
-
-                <button id="save-fit-button" class="button-primary" type="button">
-                  Save fit
-                </button>
               </div>
               <div id="outfit-catalog" class="outfit-catalog"></div>
             </section>
@@ -463,6 +459,23 @@
 
           <aside class="panel panel-tight fitter-right-panel">
             <div id="fit-selection" class="fit-selection"></div>
+            <section class="fit-command-strip">
+              <button id="save-fit-button" class="button-primary" type="button">
+                Save fit
+              </button>
+              <button id="compare-fit-button" class="button-secondary" type="button">
+                Compare
+              </button>
+              <button id="share-fit-button" class="button-secondary" type="button">
+                Share
+              </button>
+              <button id="import-fit-button" class="button-secondary" type="button">
+                Import
+              </button>
+              <button id="reset-fit-button" class="button-secondary" type="button">
+                Reset to stock
+              </button>
+            </section>
             <div class="fitter-right-scroll">
               <section class="fit-owned-block fit-owned-block-compact">
                 <div class="panel-head panel-head-compact">
@@ -513,6 +526,128 @@
         <div class="modal-actions">
           <button id="fit-save-cancel" class="button-secondary" type="button">Cancel</button>
           <button id="fit-save-submit" class="button-primary" type="button">Save fit</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="fit-share-modal" class="modal-shell" hidden>
+      <div class="modal-backdrop" data-modal-close="fit-share"></div>
+      <div class="modal-card modal-card-wide">
+        <div class="panel-head panel-head-compact">
+          <div>
+            <h2>Share fit</h2>
+            <p>Export the current fit as text, markdown, Steam BBCode, JSON, or a profile card image.</p>
+          </div>
+        </div>
+        <div class="modal-body">
+          <section id="fit-share-export-panel" class="fit-share-panel">
+            <div class="fit-share-toolbar">
+              <label class="field">
+                <span>Format</span>
+                <div class="select-shell">
+                  <select id="fit-share-format">
+                    <option value="plain">Plain text</option>
+                    <option value="markdown">Markdown</option>
+                    <option value="steam">Steam / BBCode</option>
+                    <option value="json">JSON</option>
+                  </select>
+                </div>
+              </label>
+            </div>
+            <div id="fit-share-image-panel" class="fit-share-image-panel">
+              <div class="fit-share-image-frame">
+                <img id="fit-share-image-preview" class="fit-share-image-preview" alt="Fit profile card preview" />
+              </div>
+            </div>
+            <div id="fit-share-text-panel" class="fit-share-preview-block">
+              <label class="field">
+                <span>Preview</span>
+                <textarea id="fit-share-output" class="modal-textarea fit-share-textarea" readonly></textarea>
+              </label>
+            </div>
+            <div id="fit-share-status" class="modal-copy" hidden></div>
+          </section>
+        </div>
+        <div class="modal-actions">
+          <button id="fit-share-cancel" class="button-secondary" type="button">Close</button>
+          <button id="fit-share-copy" class="button-secondary" type="button">Copy text</button>
+          <button id="fit-share-download" class="button-primary" type="button">Download image</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="fit-import-modal" class="modal-shell" hidden>
+      <div class="modal-backdrop" data-modal-close="fit-import"></div>
+      <div class="modal-card modal-card-wide">
+        <div class="panel-head panel-head-compact">
+          <div>
+            <h2>Import fit</h2>
+            <p>Paste any export created by this app. The format is detected automatically.</p>
+          </div>
+        </div>
+        <div class="modal-body">
+          <label class="field">
+            <span>Paste fit text</span>
+            <textarea id="fit-import-input" class="modal-textarea fit-share-textarea" placeholder="Paste exported fit text, markdown, Steam BBCode, JSON, or an older ESO-FIT code here."></textarea>
+          </label>
+          <div id="fit-import-status" class="modal-copy" hidden></div>
+        </div>
+        <div class="modal-actions">
+          <button id="fit-import-cancel" class="button-secondary" type="button">Close</button>
+          <button id="fit-import-submit" class="button-primary" type="button">Load fit</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="fit-compare-modal" class="modal-shell" hidden>
+      <div class="modal-backdrop" data-modal-close="fit-compare"></div>
+      <div class="modal-card modal-card-wide">
+        <div class="panel-head panel-head-compact">
+          <div>
+            <h2>Compare fits</h2>
+            <p>Compare the current fit against stock, saved fits, or other baseline fits for the same hull.</p>
+          </div>
+        </div>
+        <div class="modal-body fit-compare-layout">
+          <label class="field">
+            <span>Compare against</span>
+            <div class="select-shell">
+              <select id="fit-compare-target"></select>
+            </div>
+          </label>
+          <div id="fit-compare-status" class="modal-copy" hidden></div>
+          <div id="fit-compare-summary" class="fit-compare-summary"></div>
+          <div id="fit-compare-loadout" class="fit-compare-loadout"></div>
+        </div>
+        <div class="modal-actions">
+          <button id="fit-compare-cancel" class="button-secondary" type="button">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="fleet-rollout-modal" class="modal-shell" hidden>
+      <div class="modal-backdrop" data-modal-close="fleet-rollout"></div>
+      <div class="modal-card modal-card-wide">
+        <div class="panel-head panel-head-compact">
+          <div>
+            <h2>Fleet rollout</h2>
+            <p>Apply a fit to a whole ship group with live outfitter checks.</p>
+          </div>
+        </div>
+        <div class="modal-body">
+          <div id="fleet-rollout-preview" class="fleet-rollout-preview"></div>
+          <label class="debug-check-row debug-check-row-inline">
+            <input id="fleet-rollout-game-closed" type="checkbox" />
+            <div class="debug-check-body">
+              <strong>Endless Sky is closed</strong>
+              <small>Save edits can be lost if the game is still running.</small>
+            </div>
+          </label>
+          <div id="fleet-rollout-status" class="modal-copy" hidden></div>
+        </div>
+        <div class="modal-actions">
+          <button id="fleet-rollout-cancel" class="button-secondary" type="button">Cancel</button>
+          <button id="fleet-rollout-apply" class="button-primary" type="button">Apply rollout</button>
         </div>
       </div>
     </div>

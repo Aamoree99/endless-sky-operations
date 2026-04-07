@@ -71,7 +71,7 @@ async function startServer() {
     if (!quitting && mainWindow && !mainWindow.isDestroyed()) {
       dialog.showErrorBox(
         "Local server stopped",
-        "The Endless Sky Operations backend stopped unexpectedly. Restart the app to continue."
+        "The ES: Operations backend stopped unexpectedly. Restart the app to continue."
       );
     }
   });
@@ -99,7 +99,7 @@ async function createWindow() {
     minWidth: 1220,
     minHeight: 760,
     backgroundColor: "#0b0f1a",
-    title: "Endless Sky Operations",
+    title: "ES: Operations",
     webPreferences: {
       contextIsolation: true,
       preload: path.join(app.getAppPath(), "electron", "preload.mjs"),

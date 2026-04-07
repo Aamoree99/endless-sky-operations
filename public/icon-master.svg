@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0%" stop-color="#151a18" />
+      <stop offset="100%" stop-color="#0b0f0e" />
+    </linearGradient>
+    <linearGradient id="panel" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#26302b" />
+      <stop offset="100%" stop-color="#141918" />
+    </linearGradient>
+    <linearGradient id="route" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#ffe08a" />
+      <stop offset="100%" stop-color="#d39d33" />
+    </linearGradient>
+    <linearGradient id="node" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0%" stop-color="#f7e3a6" />
+      <stop offset="100%" stop-color="#d5a945" />
+    </linearGradient>
+    <pattern id="grid" width="42" height="42" patternUnits="userSpaceOnUse">
+      <path d="M42 0H0V42" fill="none" stroke="rgba(183,210,195,0.07)" stroke-width="1"/>
+    </pattern>
+    <filter id="softGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="10" result="b"/>
+      <feColorMatrix in="b" type="matrix"
+        values="0 0 0 0 0.98
+                0 0 0 0 0.84
+                0 0 0 0 0.47
+                0 0 0 0.36 0"/>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" fill="#090c0b"/>
+  <path d="M112 72H850L952 174V912L850 952H174L72 850V112Z" fill="url(#panel)"/>
+  <path d="M128 96H834L928 190V896L834 928H190L96 834V128Z" fill="url(#bg)"/>
+  <rect x="96" y="96" width="832" height="832" fill="url(#grid)" opacity="0.92"/>
+
+  <g opacity="0.9">
+    <circle cx="282" cy="734" r="112" fill="rgba(126,161,143,0.06)"/>
+    <circle cx="512" cy="522" r="132" fill="rgba(126,161,143,0.07)"/>
+    <circle cx="742" cy="306" r="112" fill="rgba(126,161,143,0.06)"/>
+  </g>
+
+  <g>
+    <path d="M282 734L512 522L742 306" fill="none" stroke="url(#route)" stroke-width="86" stroke-linecap="round" stroke-linejoin="round" opacity="0.18" filter="url(#softGlow)"/>
+    <path d="M282 734L512 522L742 306" fill="none" stroke="url(#route)" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="282" cy="734" r="66" fill="#0d100f" stroke="url(#route)" stroke-width="18"/>
+    <circle cx="512" cy="522" r="66" fill="#0d100f" stroke="url(#route)" stroke-width="18"/>
+    <circle cx="742" cy="306" r="66" fill="#0d100f" stroke="url(#route)" stroke-width="18"/>
+    <circle cx="282" cy="734" r="28" fill="url(#node)"/>
+    <circle cx="512" cy="522" r="28" fill="url(#node)"/>
+    <circle cx="742" cy="306" r="28" fill="url(#node)"/>
+  </g>
+
+  <path d="M156 134H360" stroke="rgba(233,241,237,0.07)" stroke-width="2"/>
+  <path d="M664 890H868" stroke="rgba(233,241,237,0.06)" stroke-width="2"/>
+</svg>

@@ -1,20 +1,20 @@
-# Endless Sky Operations
+# ES: Operations
 
-A local desktop companion for **Endless Sky** that reads your installed game data and your current save to help with planning, trading, fleet management, and fitting.
+A local desktop companion for **Endless Sky** that cuts down alt-tabbing between the game, notes, spreadsheets, and wiki pages.
 
-Instead of jumping between the game, wiki pages, notes, and spreadsheets, you get one local tool with:
-- trade route planning
-- live system and market views
-- fleet and cargo overview
-- ship fitting tools
-- spoiler-safe reference pages based on your actual progress
+It reads your installed game data and your current save, then gives you one place for:
+- trade planning
+- map browsing
+- fleet operations
+- ship fitting
+- spoiler-safe lore and reference pages
 
 [Download the latest build](https://github.com/Aamoree99/endless-sky-operations/releases/latest)  
 [Release notes](https://github.com/Aamoree99/endless-sky-operations/blob/main/CHANGELOG.md)
 
 ## Why use it
 
-**Endless Sky Operations** is meant for players who want better visibility into their current run without depending on online tools or manually tracking everything themselves.
+**ES: Operations** is meant for players who want better visibility into their current run without depending on online tools or manually tracking everything themselves.
 
 It uses your local Endless Sky installation and your current save to show information that is relevant to the run you are actually playing.
 
@@ -36,10 +36,10 @@ Browse systems, planets, prices, landing targets, shipyards, outfitters, and loc
 Read spoiler-safe lore and reference pages built from content already opened in your current save.
 
 ### Fleet
-Inspect your fleet, cargo, mission occupancy, standings, and licenses in one place.
+Inspect your fleet, cargo, mission occupancy, standings, licenses, grouped ship series, and rollout readiness in one place.
 
 ### Fitter
-Plan ships and outfits using your local official game data.
+Plan ships and outfits using your local official game data, compare fits, export and import fit payloads, and generate shareable fit cards.
 
 ### Settings
 Configure the detected Endless Sky installation path and save tracking if auto-detection fails.
@@ -59,8 +59,20 @@ The main download point is the Releases page.
 Available package formats:
 - **macOS**: `.dmg` and `.zip`
 - **Windows**: installer `.exe` and portable `.exe`
+- **Linux**: `AppImage` and `.deb`
 
 The app starts its own local backend internally. You do not need to run Node manually, manage ports, or clean up background services after closing it.
+
+## What changed in the current beta
+
+The current `0.4.0` beta is focused on fitting and fleet operations:
+- fit sharing in text, markdown, BBCode, JSON, and share-code form
+- fit import that auto-detects supported formats
+- compare view for current, stock, and saved fits
+- profile-card image export for sharing builds
+- grouped fleet rollout tools with live validation against the current outfitter
+- desktop branding update to `ES: Operations`
+- platform icon assets prepared for macOS, Windows, and Linux
 
 ## Quick start
 
@@ -81,6 +93,8 @@ Default `recent.txt` paths:
 Linux fallback:
 - `~/.config/endless-sky/recent.txt`
 
+Default game install paths vary more on Linux than on macOS or Windows, so if auto-detection misses your install, open **Settings** and point the app at your Endless Sky folder manually.
+
 ## Accuracy notes
 
 Most values are rebuilt from your current save and the official game data, but some numbers may still differ slightly from what you see in-game.
@@ -97,6 +111,7 @@ This tool is especially useful if you:
 - trade regularly and want faster route evaluation
 - manage a growing fleet and want a clearer overview
 - compare ship and outfit options outside the in-game UI
+- keep multiple ships on the same standard fit and want to manage them as a group
 - want reference tools without opening external wiki pages
 - prefer local tools over browser-based helpers
 

@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.4.0 beta
+
+### Added
+- Fit sharing in text, markdown, BBCode, JSON, and machine-readable share-code formats.
+- Fit import flow that auto-detects supported payload formats instead of forcing one input style.
+- Fit comparison modal with stat deltas and loadout diffs.
+- Profile-card image export for sharing builds outside the app.
+- Fleet rollout tools for applying the current fit to a whole ship group or normalizing a series.
+- Platform icon assets for macOS, Windows, and Linux builds.
+
+### Improved
+- Fitter header, fit actions, and saved-fit cards were redesigned to read more like a product UI and less like a debug panel.
+- Fleet groups now show rollout readiness and fit drift more clearly.
+- Share, import, and compare modals now scroll correctly in smaller windows and close on outside click.
+- Desktop branding now presents the app as `ES: Operations`.
+
+### Changed
+- macOS packaging now uses a proper app icon and display name while keeping the helper bundle naming valid.
+- Linux release packaging has been prepared in the release workflow.
+
+### Notes
+- This is a beta release. The main workflows are in place, but this cut is meant for real use and UI validation before a later stable pass.
+
 ## v0.3.0
 
 ### Added

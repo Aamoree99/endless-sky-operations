@@ -23,6 +23,7 @@ import { createFitEngine } from "./app/fit-engine.js";
 import { createTrackerController } from "./app/tracker-controller.js";
 import { createPlannerController } from "./app/planner-view.js";
 import { createFleetController } from "./app/fleet-view.js";
+import { buildFleetRolloutPreview } from "./app/fleet-ops.js";
 import { createAtlasController } from "./app/atlas-view.js";
 import { createRouteMapController } from "./app/route-map-view.js";
 import { createWikiController } from "./app/wiki-view.js";
@@ -82,12 +83,44 @@ const licenses = document.getElementById("licenses");
 const outfitSearch = document.getElementById("outfit-search");
 const outfitCategory = document.getElementById("outfit-category");
 const saveFitButton = document.getElementById("save-fit-button");
+const compareFitButton = document.getElementById("compare-fit-button");
+const shareFitButton = document.getElementById("share-fit-button");
+const importFitButton = document.getElementById("import-fit-button");
+const resetFitButton = document.getElementById("reset-fit-button");
 const fitSaveModal = document.getElementById("fit-save-modal");
 const fitSaveName = document.getElementById("fit-save-name");
 const fitSaveNote = document.getElementById("fit-save-note");
 const fitSaveCharcount = document.getElementById("fit-save-charcount");
 const fitSaveCancel = document.getElementById("fit-save-cancel");
 const fitSaveSubmit = document.getElementById("fit-save-submit");
+const fitShareModal = document.getElementById("fit-share-modal");
+const fitShareFormat = document.getElementById("fit-share-format");
+const fitShareOutput = document.getElementById("fit-share-output");
+const fitShareTextPanel = document.getElementById("fit-share-text-panel");
+const fitShareImagePanel = document.getElementById("fit-share-image-panel");
+const fitShareImagePreview = document.getElementById("fit-share-image-preview");
+const fitShareStatus = document.getElementById("fit-share-status");
+const fitShareCancel = document.getElementById("fit-share-cancel");
+const fitShareCopy = document.getElementById("fit-share-copy");
+const fitShareDownload = document.getElementById("fit-share-download");
+const fitImportModal = document.getElementById("fit-import-modal");
+const fitImportInput = document.getElementById("fit-import-input");
+const fitImportStatus = document.getElementById("fit-import-status");
+const fitImportCancel = document.getElementById("fit-import-cancel");
+const fitImportSubmit = document.getElementById("fit-import-submit");
+const fitShareExportPanel = document.getElementById("fit-share-export-panel");
+const fitCompareModal = document.getElementById("fit-compare-modal");
+const fitCompareTarget = document.getElementById("fit-compare-target");
+const fitCompareStatus = document.getElementById("fit-compare-status");
+const fitCompareSummary = document.getElementById("fit-compare-summary");
+const fitCompareLoadout = document.getElementById("fit-compare-loadout");
+const fitCompareCancel = document.getElementById("fit-compare-cancel");
+const fleetRolloutModal = document.getElementById("fleet-rollout-modal");
+const fleetRolloutPreview = document.getElementById("fleet-rollout-preview");
+const fleetRolloutGameClosed = document.getElementById("fleet-rollout-game-closed");
+const fleetRolloutStatus = document.getElementById("fleet-rollout-status");
+const fleetRolloutCancel = document.getElementById("fleet-rollout-cancel");
+const fleetRolloutApply = document.getElementById("fleet-rollout-apply");
 const debugWarningModal = document.getElementById("debug-warning-modal");
 const debugWarningCancel = document.getElementById("debug-warning-cancel");
 const debugWarningConfirm = document.getElementById("debug-warning-confirm");
@@ -168,11 +201,14 @@ const state = {
   fitShipName: null,
   fitLoadout: {},
   fitSourceShipId: null,
+  fitDraftName: "",
+  fitDraftNote: "",
   fitSelectedOutfitName: null,
   fitBrowserMode: "ships",
   fitterPane: "ships",
   fitListScopeShipName: null,
   fitShipCategory: "all",
+  fleetRolloutDraft: null,
   selectedRouteKey: null,
   selectedRoute: null,
   atlasSelectedSystem: null,
@@ -488,6 +524,12 @@ const fleetController = createFleetController({
     fleetList,
     standings,
     licenses,
+    fleetRolloutModal,
+    fleetRolloutPreview,
+    fleetRolloutGameClosed,
+    fleetRolloutStatus,
+    fleetRolloutCancel,
+    fleetRolloutApply,
   },
   helpers: {
     escapeHtml,
@@ -496,14 +538,19 @@ const fleetController = createFleetController({
     formatOneDecimal,
     formatTwoDecimals,
     metricCard,
+    buildFleetRolloutPreview,
   },
   selectors: {
     summarizeFit,
     normalizeShipDisplayShip,
     formatSaleLocation,
+    getOutfitDefinition,
   },
   actions: {
     loadShipIntoFitter,
+    syncModalBodyState,
+    fetchStatus,
+    rerenderAll,
   },
 });
 
@@ -511,6 +558,8 @@ const {
   renderFleet,
   renderStandings,
   renderLicenses,
+  bindFleetEvents,
+  closeFleetRolloutModal,
 } = fleetController;
 
 const atlasController = createAtlasController({
@@ -578,12 +627,38 @@ const fitterController = createFitterController({
     outfitSearch,
     outfitCategory,
     saveFitButton,
+    compareFitButton,
+    shareFitButton,
+    importFitButton,
+    resetFitButton,
     fitSaveModal,
     fitSaveName,
     fitSaveNote,
     fitSaveCharcount,
     fitSaveCancel,
     fitSaveSubmit,
+    fitShareModal,
+    fitShareFormat,
+    fitShareOutput,
+    fitShareTextPanel,
+    fitShareImagePanel,
+    fitShareImagePreview,
+    fitShareStatus,
+    fitShareCancel,
+    fitShareCopy,
+    fitShareDownload,
+    fitImportModal,
+    fitImportInput,
+    fitImportStatus,
+    fitImportCancel,
+    fitImportSubmit,
+    fitShareExportPanel,
+    fitCompareModal,
+    fitCompareTarget,
+    fitCompareStatus,
+    fitCompareSummary,
+    fitCompareLoadout,
+    fitCompareCancel,
     fitBrowserSearch,
     fitShipCategory,
     fitShipCategoryField,
@@ -630,6 +705,9 @@ const {
   renderFitBrowser,
   bindFitterEvents,
   closeFitSaveModal,
+  closeFitShareModal,
+  closeFitImportModal,
+  closeFitCompareModal,
 } = fitterController;
 
 function getSaveInfo() {
@@ -653,7 +731,14 @@ function hasActiveSave() {
 }
 
 function syncModalBodyState() {
-  const anyOpen = !fitSaveModal?.hidden || !debugWarningModal?.hidden || !savePathModal?.hidden;
+  const anyOpen =
+    !fitSaveModal?.hidden ||
+    !fitShareModal?.hidden ||
+    !fitImportModal?.hidden ||
+    !fitCompareModal?.hidden ||
+    !fleetRolloutModal?.hidden ||
+    !debugWarningModal?.hidden ||
+    !savePathModal?.hidden;
   document.body.classList.toggle("is-modal-open", Boolean(anyOpen));
 }
 function renderPrimaryTabs() {
@@ -728,10 +813,12 @@ function syncPageFromHash() {
   setPage(requested || "planner");
 }
 
-function loadShipIntoFitter(shipName, loadout = null, sourceShipId = null) {
+function loadShipIntoFitter(shipName, loadout = null, sourceShipId = null, fitMeta = null) {
   state.fitShipName = shipName;
   state.fitLoadout = cloneLoadout(loadout || getStockLoadout(shipName));
   state.fitSourceShipId = sourceShipId;
+  state.fitDraftName = String(fitMeta?.name || "").trim() || `${shipName} fit`;
+  state.fitDraftNote = String(fitMeta?.note || "").trim().slice(0, 280);
   state.fitSelectedOutfitName = null;
   state.fitListScopeShipName = shipName;
   setPage("fitter");
@@ -768,6 +855,8 @@ async function fetchBootstrap() {
       data.ships.find((ship) => ship.name === "Geocoris")?.name || data.ships[0].name;
     state.fitShipName = defaultShip;
     state.fitLoadout = getStockLoadout(defaultShip);
+    state.fitDraftName = `${defaultShip} fit`;
+    state.fitDraftNote = "";
     state.fitListScopeShipName = defaultShip;
   }
   renderShipCategoryOptions();
@@ -830,6 +919,7 @@ function rerenderAll() {
 
 function attachStaticEvents() {
   bindFitterEvents();
+  bindFleetEvents();
   bindDebugEvents();
   bindAtlasEvents();
   debugWarningCancel?.addEventListener("click", closeDebugWarningModal);
@@ -839,6 +929,18 @@ function attachStaticEvents() {
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !fitSaveModal?.hidden) {
       closeFitSaveModal();
+    }
+    if (event.key === "Escape" && !fitShareModal?.hidden) {
+      closeFitShareModal();
+    }
+    if (event.key === "Escape" && !fitImportModal?.hidden) {
+      closeFitImportModal();
+    }
+    if (event.key === "Escape" && !fitCompareModal?.hidden) {
+      closeFitCompareModal();
+    }
+    if (event.key === "Escape" && !fleetRolloutModal?.hidden) {
+      closeFleetRolloutModal();
     }
     handleGlobalEscape(event);
     if (event.key === "Escape" && !savePathModal?.hidden) {

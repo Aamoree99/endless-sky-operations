@@ -2665,8 +2665,9 @@ function buildAtlasSystems(planets, prices, systems) {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function reduceShipForStatus(ship) {
+function reduceShipForStatus(ship, saveIndex = null) {
   return {
+    saveIndex,
     uuid: ship.uuid,
     model: ship.model,
     name: ship.name,
@@ -3271,7 +3272,7 @@ async function buildStatus() {
   const prices = computePrices(save, game.mapSystems);
   const localPrices = prices[save.currentSystem] || {};
   const cargoSummary = buildCargoSummary(save, localPrices);
-  const fleetShips = save.ships.map(reduceShipForStatus);
+  const fleetShips = save.ships.map((ship, saveIndex) => reduceShipForStatus(ship, saveIndex));
   const currentSystemData = game.mapSystems[save.currentSystem] || null;
   const shipsByName = Object.fromEntries(game.ships.map((ship) => [ship.name, ship]));
   const outfitsByName = Object.fromEntries(game.outfits.map((outfit) => [outfit.name, outfit]));
@@ -3607,6 +3608,21 @@ function replaceOrInsertIndentedLine(lines, prefix, nextLine, insertAfterPrefixe
   lines.splice(insertIndex, 0, nextLine);
 }
 
+function replaceIndentedSection(lines, sectionHeader, childPrefix, nextSectionLines) {
+  const startIndex = lines.findIndex((line) => line === sectionHeader);
+  if (startIndex === -1) {
+    lines.push(...nextSectionLines);
+    return lines;
+  }
+
+  let endIndex = startIndex + 1;
+  while (endIndex < lines.length && lines[endIndex].startsWith(childPrefix)) {
+    endIndex += 1;
+  }
+  lines.splice(startIndex, endIndex - startIndex, ...nextSectionLines);
+  return lines;
+}
+
 function patchCreditsInSave(raw, credits) {
   const normalized = Math.max(0, Math.round(Number(credits) || 0));
   return rewriteTopLevelBlock(raw, (header) => header === "account", (lines) => {
@@ -3764,6 +3780,14 @@ function patchShipBlock(raw, shipPatch) {
           shipPatch.parked ? "\tparked" : null,
           ["\thull ", "\tplanet ", "\tsystem "]
         );
+      }
+      if (shipPatch.outfits !== undefined) {
+        const outfitLines = Object.entries(shipPatch.outfits || {})
+          .map(([name, count]) => [String(name).trim(), Math.max(0, Math.round(Number(count) || 0))])
+          .filter(([name, count]) => name && count > 0)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([name, count]) => `\t\t${formatSaveToken(name)}${count === 1 ? "" : ` ${count}`}`);
+        replaceIndentedSection(lines, "\toutfits", "\t\t", ["\toutfits", ...outfitLines]);
       }
       return lines;
     };

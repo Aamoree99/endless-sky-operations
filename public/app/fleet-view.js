@@ -5,6 +5,12 @@ export function createFleetController({ state, dom, helpers, selectors, actions 
     fleetList,
     standings,
     licenses,
+    fleetRolloutModal,
+    fleetRolloutPreview,
+    fleetRolloutGameClosed,
+    fleetRolloutStatus,
+    fleetRolloutCancel,
+    fleetRolloutApply,
   } = dom;
   const {
     escapeHtml,
@@ -13,15 +19,29 @@ export function createFleetController({ state, dom, helpers, selectors, actions 
     formatOneDecimal,
     formatTwoDecimals,
     metricCard,
+    buildFleetRolloutPreview,
   } = helpers;
   const {
     summarizeFit,
     normalizeShipDisplayShip,
     formatSaleLocation,
+    getOutfitDefinition,
   } = selectors;
   const {
     loadShipIntoFitter,
+    syncModalBodyState,
+    fetchStatus,
+    rerenderAll,
   } = actions;
+
+  function showFleetRolloutStatus(message = "", tone = "info") {
+    if (!fleetRolloutStatus) {
+      return;
+    }
+    fleetRolloutStatus.hidden = !message;
+    fleetRolloutStatus.textContent = message;
+    fleetRolloutStatus.dataset.tone = message ? tone : "";
+  }
 
   function getShipSalaryPerDay(ship) {
     if (!ship || ship.parked) {
@@ -118,6 +138,219 @@ export function createFleetController({ state, dom, helpers, selectors, actions 
       );
   }
 
+  function getCurrentPlanetRecord() {
+    const currentPlanet = state.status?.player?.currentPlanet;
+    if (!currentPlanet) {
+      return null;
+    }
+    return (state.status?.wiki?.planets || []).find((planet) => planet.name === currentPlanet) || null;
+  }
+
+  function getRolloutTarget(mode, group) {
+    if (mode === "current-fit") {
+      if (!state.fitShipName || state.fitShipName !== group.model) {
+        return null;
+      }
+      return {
+        label: state.fitDraftName || `${group.model} fit`,
+        note: state.fitDraftNote || "",
+        shipName: state.fitShipName,
+        loadout: state.fitLoadout,
+      };
+    }
+    const lead = group.leadShip;
+    if (!lead) {
+      return null;
+    }
+    return {
+      label: `Normalize to ${lead.name}`,
+      note: "Use the lead ship as the baseline for this group.",
+      shipName: lead.model,
+      loadout: lead.outfits || {},
+    };
+  }
+
+  function renderRolloutPreview() {
+    if (!fleetRolloutPreview) {
+      return;
+    }
+    const draft = state.fleetRolloutDraft;
+    if (!draft) {
+      fleetRolloutPreview.innerHTML = `<div class="empty-state">No rollout selected.</div>`;
+      return;
+    }
+
+    const preview = draft.preview;
+    const targetSummary = summarizeFit(draft.target.shipName, draft.target.loadout, { includeSustain: false });
+    const blockerMarkup = preview.blockers.length
+      ? `<div class="fleet-rollout-blockers">${preview.blockers.map((item) => `<div class="wiki-worldstate-note">${escapeHtml(item)}</div>`).join("")}</div>`
+      : `<div class="good">Ready to apply.</div>`;
+    const itemRows = preview.items.length
+      ? preview.items
+          .map(
+            (item) => `
+              <div class="fleet-rollout-item ${item.buyCount > 0 && !item.soldHere && preview.liveMode ? "is-missing" : ""}">
+                <span>${escapeHtml(item.name)}</span>
+                <span>${item.buyCount > 0 ? `Buy ${formatNumber(item.buyCount)}` : item.freeCount > 0 ? `Free ${formatNumber(item.freeCount)}` : "No change"}</span>
+              </div>
+            `
+          )
+          .join("")
+      : `<div class="empty-state">This group already matches the target fit.</div>`;
+
+    fleetRolloutPreview.innerHTML = `
+      <div class="fleet-rollout-head">
+        <div>
+          <div class="ship-title">${escapeHtml(draft.group.label)}</div>
+          <div class="ship-subtitle">${escapeHtml(draft.group.model)} · ${formatNumber(draft.group.ships.length)} ships · ${escapeHtml(draft.target.label)}</div>
+        </div>
+        <div class="pill-row">
+          <div class="metric-pill">Ships to change <strong>${formatNumber(preview.changedShipCount)}</strong></div>
+          <div class="metric-pill">Purchase cost <strong>${formatCredits(preview.purchaseCost)}</strong></div>
+          ${targetSummary ? `<div class="metric-pill">Target cargo <strong>${formatNumber(targetSummary.cargoSpace)}</strong></div>` : ""}
+          ${targetSummary ? `<div class="metric-pill">Target jumps <strong>${formatNumber(targetSummary.jumpCount)}</strong></div>` : ""}
+        </div>
+      </div>
+      ${draft.target.note ? `<div class="route-note">${escapeHtml(draft.target.note)}</div>` : ""}
+      <div class="meta-row">
+        <span>Planet <strong>${escapeHtml(preview.currentPlanet?.name || "Not landed")}</strong></span>
+        <span>Outfitter <strong>${preview.currentPlanet?.hasOutfitter ? "Available" : "Missing"}</strong></span>
+        <span>Credits <strong>${formatCredits(state.status?.player?.credits || 0)}</strong></span>
+      </div>
+      ${blockerMarkup}
+      <section class="fleet-rollout-section">
+        <div class="fleet-rollout-section-title">Outfit delta</div>
+        <div class="fleet-rollout-list">${itemRows}</div>
+      </section>
+      ${
+        preview.changedShips.length
+          ? `
+            <section class="fleet-rollout-section">
+              <div class="fleet-rollout-section-title">Ships that will change</div>
+              <div class="fleet-rollout-list">
+                ${preview.changedShips
+                  .map(
+                    (entry) => `
+                      <div class="fleet-rollout-item">
+                        <span>${escapeHtml(entry.ship.name)}</span>
+                        <span>${formatNumber(entry.diff.length)} changes</span>
+                      </div>
+                    `
+                  )
+                  .join("")}
+              </div>
+            </section>
+          `
+          : ""
+      }
+    `;
+
+    if (fleetRolloutApply) {
+      fleetRolloutApply.disabled = !preview.canApply || !fleetRolloutGameClosed?.checked;
+    }
+  }
+
+  function openFleetRolloutModal(mode, groupKey) {
+    const ships = [
+      ...(state.status?.fleet?.activeShips || []),
+      ...(state.status?.fleet?.parkedShips || []),
+    ].map(normalizeShipDisplayShip);
+    const groups = buildFleetGroupRows(ships);
+    const group = groups.find((entry) => entry.key === groupKey);
+    if (!group) {
+      return;
+    }
+
+    const target = getRolloutTarget(mode, group);
+    if (!target) {
+      return;
+    }
+
+    const currentPlanet = getCurrentPlanetRecord();
+    const preview = buildFleetRolloutPreview({
+      group,
+      targetLoadout: target.loadout,
+      liveMode: !state.debugMode,
+      currentPlanet,
+      currentOutfitItems: currentPlanet?.outfitItems || [],
+      currentCredits: Number(state.status?.player?.credits) || 0,
+      getOutfitDefinition,
+    });
+
+    state.fleetRolloutDraft = {
+      mode,
+      group,
+      target,
+      preview,
+    };
+    if (fleetRolloutGameClosed) {
+      fleetRolloutGameClosed.checked = false;
+    }
+    showFleetRolloutStatus("", "info");
+    fleetRolloutModal.hidden = false;
+    syncModalBodyState();
+    renderRolloutPreview();
+  }
+
+  function closeFleetRolloutModal() {
+    if (!fleetRolloutModal) {
+      return;
+    }
+    state.fleetRolloutDraft = null;
+    fleetRolloutModal.hidden = true;
+    showFleetRolloutStatus("", "info");
+    syncModalBodyState();
+  }
+
+  async function applyFleetRollout() {
+    const draft = state.fleetRolloutDraft;
+    if (!draft) {
+      return;
+    }
+    if (!fleetRolloutGameClosed?.checked) {
+      showFleetRolloutStatus("Close Endless Sky first, then confirm it here before applying the rollout.", "error");
+      renderRolloutPreview();
+      return;
+    }
+
+    const payload = {
+      level: state.debugMode ? "dangerous" : "advanced",
+      source: "fleet-rollout",
+      confirmGameClosed: true,
+      createBackup: true,
+      ships: draft.preview.changedShips.map((entry) => ({
+        saveIndex: entry.ship.saveIndex,
+        name: entry.ship.name,
+        originalName: entry.ship.name,
+        outfits: draft.target.loadout,
+      })),
+    };
+
+    if (!state.debugMode && draft.preview.purchaseCost > 0) {
+      payload.credits = Math.max(0, (Number(state.status?.player?.credits) || 0) - draft.preview.purchaseCost);
+    }
+
+    const response = await fetch("/api/save-editor", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      showFleetRolloutStatus(data.error || "The rollout could not be applied.", "error");
+      renderRolloutPreview();
+      return;
+    }
+
+    await fetchStatus();
+    rerenderAll();
+    showFleetRolloutStatus(
+      `Applied to ${draft.preview.changedShipCount} ships${data.backupPath ? " and created a backup." : "."}`,
+      "success"
+    );
+    setTimeout(() => closeFleetRolloutModal(), 500);
+  }
+
   function renderFleetOverview(ships, groups) {
     if (!fleetOverview) {
       return;
@@ -159,6 +392,7 @@ export function createFleetController({ state, dom, helpers, selectors, actions 
           : group.fitVariants > 1
             ? `${formatNumber(group.fitVariants)} fit variants detected`
             : "Uniform subgroup fit";
+        const canApplyCurrentFit = state.fitShipName === group.model;
         return `
           <article class="fleet-card fleet-group-card">
             <div class="ship-head">
@@ -183,6 +417,8 @@ export function createFleetController({ state, dom, helpers, selectors, actions 
             <div class="route-note">${escapeHtml(driftCopy)}</div>
             <div class="route-actions">
               <button class="button-inline" data-load-group-fit="${escapeHtml(leadId)}" type="button">Open lead in fitter</button>
+              <button class="button-inline" data-normalize-group="${escapeHtml(group.key)}" type="button" ${group.outliers.length ? "" : "disabled"}>Normalize group</button>
+              <button class="button-inline" data-apply-current-fit="${escapeHtml(group.key)}" type="button" ${canApplyCurrentFit ? "" : "disabled"}>Apply current fit</button>
             </div>
           </article>
         `;
@@ -201,6 +437,14 @@ export function createFleetController({ state, dom, helpers, selectors, actions 
           loadShipIntoFitter(ship.model, ship.outfits, id);
         }
       });
+    });
+
+    document.querySelectorAll("[data-normalize-group]").forEach((button) => {
+      button.addEventListener("click", () => openFleetRolloutModal("normalize", button.dataset.normalizeGroup));
+    });
+
+    document.querySelectorAll("[data-apply-current-fit]").forEach((button) => {
+      button.addEventListener("click", () => openFleetRolloutModal("current-fit", button.dataset.applyCurrentFit));
     });
   }
 
@@ -410,9 +654,20 @@ export function createFleetController({ state, dom, helpers, selectors, actions 
       : `<div class="empty-state">No active or relevant license records were found.</div>`;
   }
 
+  function bindFleetEvents() {
+    fleetRolloutCancel?.addEventListener("click", closeFleetRolloutModal);
+    fleetRolloutApply?.addEventListener("click", applyFleetRollout);
+    fleetRolloutGameClosed?.addEventListener("change", renderRolloutPreview);
+    fleetRolloutModal?.querySelectorAll("[data-modal-close='fleet-rollout']").forEach((element) => {
+      element.addEventListener("click", closeFleetRolloutModal);
+    });
+  }
+
   return {
     renderFleet,
     renderStandings,
     renderLicenses,
+    bindFleetEvents,
+    closeFleetRolloutModal,
   };
 }

@@ -1,3 +1,10 @@
+import {
+  buildFitSharePayload,
+  buildFitProfileCardSvg,
+  formatFitShareText,
+  parseFitShareText,
+} from "./fit-share.js";
+
 const FIT_CATEGORY_ORDER = [
   "Engines",
   "Guns",
@@ -27,12 +34,38 @@ export function createFitterController({ state, dom, helpers, selectors, actions
     outfitSearch,
     outfitCategory,
     saveFitButton,
+    compareFitButton,
+    shareFitButton,
+    importFitButton,
+    resetFitButton,
     fitSaveModal,
     fitSaveName,
     fitSaveNote,
     fitSaveCharcount,
     fitSaveCancel,
     fitSaveSubmit,
+    fitShareModal,
+    fitShareFormat,
+    fitShareOutput,
+    fitShareTextPanel,
+    fitShareImagePanel,
+    fitShareImagePreview,
+    fitShareStatus,
+    fitShareCancel,
+    fitShareCopy,
+    fitShareDownload,
+    fitImportModal,
+    fitImportInput,
+    fitImportStatus,
+    fitImportCancel,
+    fitImportSubmit,
+    fitShareExportPanel,
+    fitCompareModal,
+    fitCompareTarget,
+    fitCompareStatus,
+    fitCompareSummary,
+    fitCompareLoadout,
+    fitCompareCancel,
     fitBrowserSearch,
     fitShipCategory,
     fitShipCategoryField,
@@ -71,6 +104,13 @@ export function createFitterController({ state, dom, helpers, selectors, actions
     adjustLoadout,
     syncModalBodyState,
   } = actions;
+
+  let fitShareContext = null;
+  let fitShareProfileSvg = "";
+  let fitCompareContext = null;
+  let fitCompareTargetKey = "";
+  let fitShareRenderToken = 0;
+  const shipImageCache = new Map();
 
   function getInstalledOutfitNames() {
     const names = new Set();
@@ -279,12 +319,697 @@ export function createFitterController({ state, dom, helpers, selectors, actions
     ].map(normalizeShipDisplayShip);
   }
 
+  function getCurrentFitDraft() {
+    if (!state.fitShipName) {
+      return null;
+    }
+    const liveShip = getFitterOwnedShips().find(
+      (candidate) => (candidate.uuid || `${candidate.model}-${candidate.name}`) === state.fitSourceShipId
+    );
+    return {
+      shipName: state.fitShipName,
+      shipLabel: liveShip?.name || state.fitShipName,
+      name: state.fitDraftName || `${state.fitShipName} fit`,
+      note: state.fitDraftNote || "",
+      loadout: state.fitLoadout,
+    };
+  }
+
+  function resetCurrentFit() {
+    if (!state.fitShipName) {
+      return;
+    }
+    loadShipIntoFitter(state.fitShipName);
+  }
+
+  function updateFitCommandState() {
+    const hasShip = Boolean(state.fitShipName);
+    if (saveFitButton) {
+      saveFitButton.disabled = !hasShip;
+    }
+    if (compareFitButton) {
+      compareFitButton.disabled = !hasShip;
+    }
+    if (shareFitButton) {
+      shareFitButton.disabled = !hasShip;
+    }
+    if (importFitButton) {
+      importFitButton.disabled = false;
+    }
+    if (resetFitButton) {
+      resetFitButton.disabled = !hasShip;
+    }
+  }
+
+  function showFitShareStatus(target, message = "", tone = "info") {
+    if (!target) {
+      return;
+    }
+    target.hidden = !message;
+    target.textContent = message;
+    target.dataset.tone = message ? tone : "";
+  }
+
+  function getFitShareContext() {
+    return fitShareContext || getCurrentFitDraft();
+  }
+
+  function getFitCompareEntries(shipName = state.fitShipName) {
+    if (!shipName) {
+      return [];
+    }
+    const entries = [
+      {
+        key: `stock:${shipName}`,
+        shipName,
+        label: `Stock · ${shipName}`,
+        name: `${shipName} Stock`,
+        note: "Official stock fit from the game.",
+        loadout: getStockLoadout(shipName),
+        kind: "stock",
+      },
+      ...(state.bootstrap?.fits?.presets || [])
+        .filter((fit) => fit.shipName === shipName)
+        .map((fit) => ({
+          key: `preset:${fit.id}`,
+          shipName: fit.shipName,
+          label: `Baseline · ${fit.name}`,
+          name: fit.name,
+          note: fit.note || "",
+          loadout: fit.loadout || getStockLoadout(fit.shipName),
+          kind: "preset",
+        })),
+      ...(state.bootstrap?.fits?.saved || [])
+        .filter((fit) => fit.shipName === shipName)
+        .map((fit) => ({
+          key: `saved:${fit.id}`,
+          shipName: fit.shipName,
+          label: `Saved · ${fit.name}`,
+          name: fit.name,
+          note: fit.note || "",
+          loadout: fit.loadout,
+          kind: "saved",
+        })),
+    ];
+    const seen = new Set();
+    return entries.filter((entry) => {
+      if (!entry?.loadout) {
+        return false;
+      }
+      if (seen.has(entry.key)) {
+        return false;
+      }
+      seen.add(entry.key);
+      return true;
+    });
+  }
+
+  function getFitCompareTarget() {
+    const current = fitCompareContext || getCurrentFitDraft();
+    if (!current) {
+      return null;
+    }
+    const options = getFitCompareEntries(current.shipName);
+    return options.find((entry) => entry.key === fitCompareTargetKey) || options[0] || null;
+  }
+
+  function diffFitLoadouts(currentLoadout, targetLoadout) {
+    const names = [...new Set([...Object.keys(currentLoadout || {}), ...Object.keys(targetLoadout || {})])].sort((a, b) =>
+      a.localeCompare(b)
+    );
+    const added = [];
+    const removed = [];
+    const changed = [];
+    for (const name of names) {
+      const current = Number(currentLoadout?.[name] || 0);
+      const target = Number(targetLoadout?.[name] || 0);
+      if (current === target) {
+        continue;
+      }
+      if (!current && target) {
+        added.push({ name, current, target, delta: target });
+      } else if (current && !target) {
+        removed.push({ name, current, target, delta: -current });
+      } else {
+        changed.push({ name, current, target, delta: target - current });
+      }
+    }
+    return { added, removed, changed };
+  }
+
+  function formatSignedDelta(value, formatter = formatNumber) {
+    const numeric = Number(value) || 0;
+    const abs = formatter(Math.abs(numeric));
+    if (!numeric) {
+      return "0";
+    }
+    return `${numeric > 0 ? "+" : "-"}${abs}`;
+  }
+
+  function renderCompareMetricRow(label, currentValue, targetValue, deltaText, tone = "neutral") {
+    return `
+      <div class="fit-compare-metric-row">
+        <span class="fit-compare-metric-label">${escapeHtml(label)}</span>
+        <span class="fit-compare-metric-value">${escapeHtml(currentValue)}</span>
+        <span class="fit-compare-metric-value">${escapeHtml(targetValue)}</span>
+        <span class="fit-compare-metric-delta is-${escapeHtml(tone)}">${escapeHtml(deltaText)}</span>
+      </div>
+    `;
+  }
+
+  function renderCompareLoadoutPanel(title, payload) {
+    const grouped = groupEntriesByCategory(groupLoadoutEntries(payload.loadout || {}));
+    return `
+      <section class="fit-compare-loadout-panel">
+        <div class="fit-compare-loadout-title">${escapeHtml(title)}</div>
+        <div class="fit-compare-loadout-groups">
+          ${
+            grouped.length
+              ? grouped
+                  .map(
+                    ([category, items]) => `
+                      <div class="fit-compare-loadout-group">
+                        <div class="fit-compare-loadout-group-title">${escapeHtml(category)}</div>
+                        <div class="fit-compare-loadout-group-list">
+                          ${items
+                            .map(
+                              (item) => `
+                                <div class="fit-compare-loadout-item">
+                                  <span>${escapeHtml(item.name)}</span>
+                                  <strong>${escapeHtml(formatNumber(item.count))}</strong>
+                                </div>
+                              `
+                            )
+                            .join("")}
+                        </div>
+                      </div>
+                    `
+                  )
+                  .join("")
+              : `<div class="fit-compare-diff-empty">No outfits.</div>`
+          }
+        </div>
+      </section>
+    `;
+  }
+
+  function renderFitCompareModal() {
+    if (!fitCompareModal) {
+      return;
+    }
+    const current = fitCompareContext || getCurrentFitDraft();
+    if (!current || !fitCompareTarget || !fitCompareSummary || !fitCompareLoadout) {
+      return;
+    }
+    const options = getFitCompareEntries(current.shipName);
+    if (!options.length) {
+      fitCompareTarget.innerHTML = "";
+      fitCompareSummary.innerHTML = "";
+      fitCompareLoadout.innerHTML = "";
+      showFitShareStatus(fitCompareStatus, "No comparable fits found for this hull yet.", "info");
+      return;
+    }
+
+    if (!options.some((entry) => entry.key === fitCompareTargetKey)) {
+      fitCompareTargetKey = options[0].key;
+    }
+    fitCompareTarget.innerHTML = options
+      .map((entry) => `<option value="${escapeHtml(entry.key)}">${escapeHtml(entry.label)}</option>`)
+      .join("");
+    fitCompareTarget.value = fitCompareTargetKey;
+
+    const target = getFitCompareTarget();
+    if (!target) {
+      fitCompareSummary.innerHTML = "";
+      fitCompareLoadout.innerHTML = "";
+      showFitShareStatus(fitCompareStatus, "Pick another fit to compare against.", "error");
+      return;
+    }
+
+    const currentSummary = summarizeFit(current.shipName, current.loadout, { includeSustain: true });
+    const targetSummary = summarizeFit(target.shipName, target.loadout, { includeSustain: true });
+    if (!currentSummary || !targetSummary) {
+      fitCompareSummary.innerHTML = "";
+      fitCompareLoadout.innerHTML = "";
+      showFitShareStatus(fitCompareStatus, "One of the compared fits could not be summarized.", "error");
+      return;
+    }
+
+    showFitShareStatus(fitCompareStatus, "", "info");
+
+    const currentCombat = currentSummary.sustain?.combat;
+    const targetCombat = targetSummary.sustain?.combat;
+    const metrics = [
+      {
+        label: "Speed",
+        current: formatOneDecimal(currentSummary.maxSpeed),
+        target: formatOneDecimal(targetSummary.maxSpeed),
+        delta: formatSignedDelta(targetSummary.maxSpeed - currentSummary.maxSpeed, formatOneDecimal),
+        tone: targetSummary.maxSpeed >= currentSummary.maxSpeed ? "up" : "down",
+      },
+      {
+        label: "Cargo",
+        current: `${formatNumber(currentSummary.cargoSpace)} t`,
+        target: `${formatNumber(targetSummary.cargoSpace)} t`,
+        delta: `${targetSummary.cargoSpace - currentSummary.cargoSpace >= 0 ? "+" : "-"}${formatNumber(Math.abs(targetSummary.cargoSpace - currentSummary.cargoSpace))} t`,
+        tone: targetSummary.cargoSpace >= currentSummary.cargoSpace ? "up" : "down",
+      },
+      {
+        label: "Jumps",
+        current: formatNumber(currentSummary.jumpCount),
+        target: formatNumber(targetSummary.jumpCount),
+        delta: formatSignedDelta(targetSummary.jumpCount - currentSummary.jumpCount, formatNumber),
+        tone: targetSummary.jumpCount >= currentSummary.jumpCount ? "up" : "down",
+      },
+      {
+        label: "Shields",
+        current: formatNumber(currentSummary.shields),
+        target: formatNumber(targetSummary.shields),
+        delta: formatSignedDelta(targetSummary.shields - currentSummary.shields, formatNumber),
+        tone: targetSummary.shields >= currentSummary.shields ? "up" : "down",
+      },
+      {
+        label: "Hull",
+        current: formatNumber(currentSummary.hull),
+        target: formatNumber(targetSummary.hull),
+        delta: formatSignedDelta(targetSummary.hull - currentSummary.hull, formatNumber),
+        tone: targetSummary.hull >= currentSummary.hull ? "up" : "down",
+      },
+      {
+        label: "Crew",
+        current: `${formatNumber(currentSummary.requiredCrew)} / ${formatNumber(currentSummary.bunks)}`,
+        target: `${formatNumber(targetSummary.requiredCrew)} / ${formatNumber(targetSummary.bunks)}`,
+        delta: formatSignedDelta(targetSummary.requiredCrew - currentSummary.requiredCrew, formatNumber),
+        tone: "neutral",
+      },
+      {
+        label: "Value",
+        current: formatCredits(currentSummary.totalCost),
+        target: formatCredits(targetSummary.totalCost),
+        delta: formatSignedDelta(targetSummary.totalCost - currentSummary.totalCost, formatCredits),
+        tone: "neutral",
+      },
+      {
+        label: "Outfit free",
+        current: `${formatRemaining(currentSummary.freeOutfit)} / ${formatNumber(getShipDefinition(current.shipName)?.attributes?.outfitSpace || 0)}`,
+        target: `${formatRemaining(targetSummary.freeOutfit)} / ${formatNumber(getShipDefinition(target.shipName)?.attributes?.outfitSpace || 0)}`,
+        delta: formatSignedDelta(targetSummary.freeOutfit - currentSummary.freeOutfit, formatNumber),
+        tone: targetSummary.freeOutfit >= currentSummary.freeOutfit ? "up" : "down",
+      },
+      {
+        label: "Weapon free",
+        current: `${formatRemaining(currentSummary.freeWeapon)} / ${formatNumber(getShipDefinition(current.shipName)?.attributes?.weaponCapacity || 0)}`,
+        target: `${formatRemaining(targetSummary.freeWeapon)} / ${formatNumber(getShipDefinition(target.shipName)?.attributes?.weaponCapacity || 0)}`,
+        delta: formatSignedDelta(targetSummary.freeWeapon - currentSummary.freeWeapon, formatNumber),
+        tone: targetSummary.freeWeapon >= currentSummary.freeWeapon ? "up" : "down",
+      },
+      {
+        label: "Engine free",
+        current: `${formatRemaining(currentSummary.freeEngine)} / ${formatNumber(getShipDefinition(current.shipName)?.attributes?.engineCapacity || 0)}`,
+        target: `${formatRemaining(targetSummary.freeEngine)} / ${formatNumber(getShipDefinition(target.shipName)?.attributes?.engineCapacity || 0)}`,
+        delta: formatSignedDelta(targetSummary.freeEngine - currentSummary.freeEngine, formatNumber),
+        tone: targetSummary.freeEngine >= currentSummary.freeEngine ? "up" : "down",
+      },
+      {
+        label: "Hull DPS",
+        current: formatOneDecimal(currentSummary.hullDps),
+        target: formatOneDecimal(targetSummary.hullDps),
+        delta: formatSignedDelta(targetSummary.hullDps - currentSummary.hullDps, formatOneDecimal),
+        tone: targetSummary.hullDps >= currentSummary.hullDps ? "up" : "down",
+      },
+      {
+        label: "Shield DPS",
+        current: formatOneDecimal(currentSummary.shieldDps),
+        target: formatOneDecimal(targetSummary.shieldDps),
+        delta: formatSignedDelta(targetSummary.shieldDps - currentSummary.shieldDps, formatOneDecimal),
+        tone: targetSummary.shieldDps >= currentSummary.shieldDps ? "up" : "down",
+      },
+      {
+        label: "Anti-missile",
+        current: formatNumber(currentSummary.antiMissile),
+        target: formatNumber(targetSummary.antiMissile),
+        delta: formatSignedDelta(targetSummary.antiMissile - currentSummary.antiMissile, formatNumber),
+        tone: targetSummary.antiMissile >= currentSummary.antiMissile ? "up" : "down",
+      },
+      {
+        label: "Jamming",
+        current: `R ${formatNumber(currentSummary.radarJamming)} · O ${formatNumber(currentSummary.opticalJamming)} · IR ${formatNumber(currentSummary.infraredJamming)}`,
+        target: `R ${formatNumber(targetSummary.radarJamming)} · O ${formatNumber(targetSummary.opticalJamming)} · IR ${formatNumber(targetSummary.infraredJamming)}`,
+        delta: "mixed",
+        tone: "neutral",
+      },
+      {
+        label: "Battery",
+        current: currentCombat?.batteryEmptyAt ? `Empty in ${formatDuration(currentCombat.batteryEmptyAt)}` : "Stable",
+        target: targetCombat?.batteryEmptyAt ? `Empty in ${formatDuration(targetCombat.batteryEmptyAt)}` : "Stable",
+        delta:
+          currentCombat?.batteryEmptyAt === targetCombat?.batteryEmptyAt
+            ? "same"
+            : targetCombat?.batteryEmptyAt
+              ? "weaker"
+              : "safer",
+        tone:
+          currentCombat?.batteryEmptyAt === targetCombat?.batteryEmptyAt
+            ? "neutral"
+            : targetCombat?.batteryEmptyAt
+              ? "down"
+              : "up",
+      },
+      {
+        label: "Heat",
+        current: currentCombat?.overheatedAt ? `Overheats in ${formatDuration(currentCombat.overheatedAt)}` : "Stable",
+        target: targetCombat?.overheatedAt ? `Overheats in ${formatDuration(targetCombat.overheatedAt)}` : "Stable",
+        delta:
+          currentCombat?.overheatedAt === targetCombat?.overheatedAt
+            ? "same"
+            : targetCombat?.overheatedAt
+              ? "hotter"
+              : "cooler",
+        tone:
+          currentCombat?.overheatedAt === targetCombat?.overheatedAt
+            ? "neutral"
+            : targetCombat?.overheatedAt
+              ? "down"
+              : "up",
+      },
+      {
+        label: "Fit state",
+        current: currentSummary.valid ? "Valid" : "Blocked",
+        target: targetSummary.valid ? "Valid" : "Blocked",
+        delta: targetSummary.valid === currentSummary.valid ? "same" : targetSummary.valid ? "safer" : "riskier",
+        tone: targetSummary.valid === currentSummary.valid ? "neutral" : targetSummary.valid ? "up" : "down",
+      },
+    ];
+
+    fitCompareSummary.innerHTML = `
+      <div class="fit-compare-head">
+        <article class="fit-compare-side">
+          <div class="eyebrow">Current</div>
+          <strong>${escapeHtml(current.name || `${current.shipName} fit`)}</strong>
+          <span>${escapeHtml(current.shipLabel || current.shipName)}</span>
+          <span>${escapeHtml(current.shipName)}</span>
+          ${current.note ? `<p>${escapeHtml(current.note)}</p>` : ""}
+        </article>
+        <article class="fit-compare-side">
+          <div class="eyebrow">Compared fit</div>
+          <strong>${escapeHtml(target.name)}</strong>
+          <span>${escapeHtml(target.shipLabel || target.shipName)}</span>
+          <span>${escapeHtml(target.shipName)}</span>
+          ${target.note ? `<p>${escapeHtml(target.note)}</p>` : ""}
+        </article>
+      </div>
+      <div class="fit-compare-metrics">
+        <div class="fit-compare-metric-row fit-compare-metric-row-head">
+          <span class="fit-compare-metric-label">Metric</span>
+          <span class="fit-compare-metric-value">Current</span>
+          <span class="fit-compare-metric-value">Compared</span>
+          <span class="fit-compare-metric-delta">Delta</span>
+        </div>
+        ${metrics.map((metric) => renderCompareMetricRow(metric.label, metric.current, metric.target, metric.delta, metric.tone)).join("")}
+      </div>
+    `;
+
+    const diff = diffFitLoadouts(current.loadout, target.loadout);
+    const renderDiffList = (title, items, tone) => `
+      <section class="fit-compare-diff-card">
+        <div class="fit-compare-diff-title">${escapeHtml(title)}</div>
+        ${
+          items.length
+            ? `<div class="fit-compare-diff-list">
+                ${items
+                  .map(
+                    (item) => `
+                      <div class="fit-compare-diff-row">
+                        <span>${escapeHtml(item.name)}</span>
+                        <strong class="is-${escapeHtml(tone)}">${escapeHtml(`${item.current} → ${item.target}`)}</strong>
+                      </div>
+                    `
+                  )
+                  .join("")}
+              </div>`
+            : `<div class="fit-compare-diff-empty">No changes.</div>`
+        }
+      </section>
+    `;
+
+    fitCompareLoadout.innerHTML = `
+      <div class="fit-compare-loadout-columns">
+        ${renderCompareLoadoutPanel("Current loadout", current)}
+        ${renderCompareLoadoutPanel("Compared loadout", target)}
+      </div>
+      <div class="fit-compare-diff-grid">
+        ${renderDiffList("Added or increased", [...diff.added, ...diff.changed.filter((item) => item.delta > 0)], "up")}
+        ${renderDiffList("Removed or reduced", [...diff.removed, ...diff.changed.filter((item) => item.delta < 0)], "down")}
+      </div>
+    `;
+  }
+
+  async function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(reader.error || new Error("Failed to read blob."));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function getShipImageDataUrl(ship) {
+    const imageUrl = ship?.spriteUrl || ship?.thumbnailUrl || "";
+    if (!imageUrl) {
+      return "";
+    }
+    if (shipImageCache.has(imageUrl)) {
+      return shipImageCache.get(imageUrl);
+    }
+    const response = await fetch(imageUrl);
+    if (!response.ok) {
+      throw new Error("The ship art could not be loaded for image export.");
+    }
+    const dataUrl = await blobToDataUrl(await response.blob());
+    shipImageCache.set(imageUrl, dataUrl);
+    return dataUrl;
+  }
+
+  async function renderFitShareModal() {
+    if (!fitShareModal) {
+      return;
+    }
+
+    const context = getFitShareContext();
+    if (!context) {
+      if (fitShareOutput) {
+        fitShareOutput.value = "";
+      }
+      if (fitShareImagePreview) {
+        fitShareImagePreview.removeAttribute("src");
+      }
+      if (fitShareDownload) {
+        fitShareDownload.hidden = true;
+      }
+      showFitShareStatus(fitShareStatus, "Pick a ship or load a fit first.", "info");
+      return;
+    }
+
+    const payload = buildFitSharePayload(context);
+    const summary = summarizeFit(payload.shipName, payload.loadout, { includeSustain: false });
+    const format = fitShareFormat?.value || "plain";
+    if (fitShareExportPanel) {
+      fitShareExportPanel.hidden = false;
+    }
+    if (fitShareOutput) {
+      fitShareOutput.value = formatFitShareText(payload, {
+        format,
+        summary,
+        getOutfitDefinition,
+        helpers: {
+          formatCredits,
+          formatNumber,
+          formatOneDecimal,
+        },
+      });
+    }
+
+    const ship = getShipDefinition(payload.shipName);
+    const renderToken = ++fitShareRenderToken;
+    fitShareProfileSvg = "";
+    showFitShareStatus(fitShareStatus, "Rendering profile card…", "info");
+    try {
+      const shipImageDataUrl = await getShipImageDataUrl(ship);
+      if (renderToken !== fitShareRenderToken) {
+        return;
+      }
+      fitShareProfileSvg = buildFitProfileCardSvg(payload, {
+        ship,
+        summary,
+        shipImageDataUrl,
+        sourceLabel: state.fitSourceShipId
+          ? `Loaded from ${(getFitterOwnedShips().find((candidate) => (candidate.uuid || `${candidate.model}-${candidate.name}`) === state.fitSourceShipId)?.name || "current ship")}`
+          : "Current fit",
+        getOutfitDefinition,
+        helpers: {
+          formatCredits,
+          formatNumber,
+          formatOneDecimal,
+        },
+      });
+      if (fitShareImagePreview) {
+        fitShareImagePreview.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(fitShareProfileSvg)}`;
+      }
+      showFitShareStatus(fitShareStatus, "Profile card ready.", "success");
+    } catch (error) {
+      fitShareProfileSvg = "";
+      showFitShareStatus(fitShareStatus, error.message || "The profile card could not be rendered.", "error");
+    }
+  }
+
+  function openFitShareModal(payload = null) {
+    if (!fitShareModal) {
+      return;
+    }
+    fitShareContext = payload ? buildFitSharePayload(payload) : getCurrentFitDraft();
+    fitShareFormat.value = fitShareFormat.value || "plain";
+    showFitShareStatus(fitShareStatus, "", "info");
+    fitShareModal.hidden = false;
+    syncModalBodyState();
+    renderFitShareModal();
+    setTimeout(() => fitShareOutput?.focus?.(), 0);
+  }
+
+  function closeFitShareModal() {
+    if (!fitShareModal) {
+      return;
+    }
+    fitShareModal.hidden = true;
+    fitShareProfileSvg = "";
+    showFitShareStatus(fitShareStatus, "", "info");
+    syncModalBodyState();
+  }
+
+  async function copyFitShareOutput() {
+    const output = fitShareOutput?.value?.trim();
+    if (!output) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(output);
+      showFitShareStatus(fitShareStatus, "Copied to clipboard.", "success");
+    } catch {
+      showFitShareStatus(fitShareStatus, "Clipboard access failed. Copy the text manually.", "error");
+    }
+  }
+
+  async function downloadFitShareImage() {
+    if (!fitShareProfileSvg) {
+      return;
+    }
+    const blob = new Blob([fitShareProfileSvg], { type: "image/svg+xml;charset=utf-8" });
+    const svgUrl = URL.createObjectURL(blob);
+    try {
+      const image = new Image();
+      image.decoding = "sync";
+      const loaded = new Promise((resolve, reject) => {
+        image.onload = resolve;
+        image.onerror = reject;
+      });
+      image.src = svgUrl;
+      await loaded;
+      const canvas = document.createElement("canvas");
+      canvas.width = 1280;
+      canvas.height = 820;
+      const context = canvas.getContext("2d");
+      context.fillStyle = "#101110";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const jpgBlob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+      const downloadUrl = URL.createObjectURL(jpgBlob || blob);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = `${(fitShareContext?.name || state.fitShipName || "fit").replace(/[^\w.-]+/g, "-")}-profile.jpg`;
+      link.click();
+      URL.revokeObjectURL(downloadUrl);
+      showFitShareStatus(fitShareStatus, "Profile card downloaded.", "success");
+    } catch {
+      const fallbackUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = fallbackUrl;
+      link.download = `${(fitShareContext?.name || state.fitShipName || "fit").replace(/[^\w.-]+/g, "-")}-profile.svg`;
+      link.click();
+      URL.revokeObjectURL(fallbackUrl);
+      showFitShareStatus(fitShareStatus, "JPG export failed. Downloaded SVG instead.", "error");
+    } finally {
+      URL.revokeObjectURL(svgUrl);
+    }
+  }
+
+  function openFitImportModal() {
+    if (!fitImportModal) {
+      return;
+    }
+    if (fitImportInput) {
+      fitImportInput.value = "";
+    }
+    showFitShareStatus(fitImportStatus, "", "info");
+    fitImportModal.hidden = false;
+    syncModalBodyState();
+    setTimeout(() => fitImportInput?.focus(), 0);
+  }
+
+  function closeFitImportModal() {
+    if (!fitImportModal) {
+      return;
+    }
+    fitImportModal.hidden = true;
+    showFitShareStatus(fitImportStatus, "", "info");
+    syncModalBodyState();
+  }
+
+  function loadImportedFit() {
+    try {
+      const payload = parseFitShareText(fitImportInput?.value || "");
+      if (!getShipDefinition(payload.shipName)) {
+        throw new Error(`This fit uses ${payload.shipName}, which is not available in the current game data.`);
+      }
+      state.fitterPane = "modules";
+      loadShipIntoFitter(payload.shipName, payload.loadout, null, {
+        name: payload.name,
+        note: payload.note,
+      });
+      closeFitImportModal();
+    } catch (error) {
+      showFitShareStatus(fitImportStatus, error.message || "The fit could not be imported.", "error");
+    }
+  }
+
+  function openFitCompareModal(targetKey = "") {
+    if (!fitCompareModal) {
+      return;
+    }
+    const current = getCurrentFitDraft();
+    if (!current) {
+      return;
+    }
+    fitCompareContext = buildFitSharePayload(current);
+    fitCompareTargetKey = targetKey;
+    fitCompareModal.hidden = false;
+    syncModalBodyState();
+    renderFitCompareModal();
+  }
+
+  function closeFitCompareModal() {
+    if (!fitCompareModal) {
+      return;
+    }
+    fitCompareModal.hidden = true;
+    showFitShareStatus(fitCompareStatus, "", "info");
+    syncModalBodyState();
+  }
+
   function openFitSaveModal() {
     if (!fitSaveModal) {
       return;
     }
-    fitSaveName.value = state.fitShipName ? `${state.fitShipName} fit` : "";
-    fitSaveNote.value = "";
+    fitSaveName.value = state.fitDraftName || (state.fitShipName ? `${state.fitShipName} fit` : "");
+    fitSaveNote.value = state.fitDraftNote || "";
     updateFitSaveCharcount();
     updateFitSaveActions();
     fitSaveModal.hidden = false;
@@ -346,6 +1071,8 @@ export function createFitterController({ state, dom, helpers, selectors, actions
       state.bootstrap.fits.saved = index >= 0
         ? existing.map((fit, fitIndex) => (fitIndex === index ? saved : fit))
         : [...existing, saved];
+      state.fitDraftName = saved.name;
+      state.fitDraftNote = saved.note || "";
       state.fitBrowserMode = "fits";
       closeFitSaveModal();
       renderFitBrowser();
@@ -458,29 +1185,55 @@ export function createFitterController({ state, dom, helpers, selectors, actions
     const presets = (state.bootstrap?.fits?.presets || []).filter((fit) => fitMatchesSearch(fit) && fitMatchesScope(fit));
     const saved = (state.bootstrap?.fits?.saved || []).filter((fit) => fitMatchesSearch(fit) && fitMatchesScope(fit));
 
-    const renderFitCard = (fit, type) => `
-      <article class="fit-browser-card fit-browser-card-compact fit-browser-fit-card" data-load-fit-browser="${escapeHtml(fit.id)}" data-fit-type="${type}">
-        <div class="fit-browser-fit-main">
-          <div class="fit-browser-card-head">
-            <div class="fit-browser-card-title">${escapeHtml(fit.name)}</div>
+    const renderFitCard = (fit, type) => {
+      const loadout = fit.loadout || getStockLoadout(fit.shipName);
+      const summary = summarizeFit(fit.shipName, loadout, { includeSustain: false });
+      const ship = getShipDefinition(fit.shipName);
+      const fitState = summary?.valid ? "Valid" : "Invalid";
+      const kindLabel = type === "preset" ? "Baseline" : "Saved";
+      const stats = summary
+        ? [
+            `Speed ${formatOneDecimal(summary.maxSpeed)}`,
+            `Cargo ${formatNumber(summary.cargoSpace)}`,
+            `Jumps ${formatNumber(summary.jumpCount)}`,
+            `Value ${formatCredits(summary.totalCost)}`,
+          ]
+        : [];
+      return `
+        <article class="fit-browser-card fit-browser-card-compact fit-browser-fit-card" data-load-fit-browser="${escapeHtml(fit.id)}" data-fit-type="${type}">
+          ${ship?.thumbnailUrl
+            ? `<img class="fit-browser-card-image fit-browser-fit-image" src="${escapeHtml(ship.thumbnailUrl)}" alt="${escapeHtml(fit.shipName)}" />`
+            : `<div class="fit-browser-card-image fit-browser-fit-image ship-thumb-placeholder"></div>`}
+          <div class="fit-browser-fit-body">
+            <div class="fit-browser-card-head">
+              <div>
+                <div class="fit-browser-card-title">${escapeHtml(fit.name)}</div>
+                <div class="fit-browser-card-meta">${escapeHtml(fit.shipName)} · ${escapeHtml(kindLabel)} · ${escapeHtml(fitState)}</div>
+              </div>
+            </div>
+            ${stats.length ? `<div class="fit-browser-fit-stats">${stats.map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join("")}</div>` : ""}
+            ${fit.note ? `<div class="fit-browser-fit-note">${escapeHtml(fit.note)}</div>` : `<div class="fit-browser-fit-note fit-browser-fit-note-empty">No note.</div>`}
+          </div>
+          <div class="fit-browser-fit-side">
+            <button class="button-inline" data-load-fit-button="${escapeHtml(fit.id)}" data-fit-type="${type}" type="button">Load</button>
+            <button class="button-inline" data-compare-fit-browser="${escapeHtml(fit.id)}" data-fit-type="${type}" type="button">Compare</button>
+            <button class="button-inline" data-share-fit-browser="${escapeHtml(fit.id)}" data-fit-type="${type}" type="button">Share</button>
             ${type === "saved" ? `<button class="fit-delete-btn" data-delete-fit="${escapeHtml(fit.id)}" title="Delete fit" type="button">✕</button>` : ""}
           </div>
-          <div class="fit-browser-card-meta">${escapeHtml(fit.shipName)}</div>
-        </div>
-        ${fit.note ? `<div class="fit-browser-fit-note">${escapeHtml(fit.note)}</div>` : `<div class="fit-browser-fit-note fit-browser-fit-note-empty">No note.</div>`}
-      </article>
-    `;
+        </article>
+      `;
+    };
 
     fitBrowserList.innerHTML = `
       ${scopeShipName && !state.debugMode ? `<div class="fit-browser-scope"><span class="tag">Ship filter: ${escapeHtml(scopeShipName)}</span><button class="button-inline" id="clear-fit-scope" type="button">Show all fits</button></div>` : ""}
       <section class="fit-browser-section">
-        <div class="fit-browser-section-title">Baseline fits</div>
+        <div class="fit-browser-section-title">Baseline fits <span class="fit-browser-section-count">${formatNumber(presets.length)}</span></div>
         <div class="fit-browser-grid">
           ${presets.length ? presets.map((fit) => renderFitCard(fit, "preset")).join("") : `<div class="empty-state">No baseline fits match the current scope.</div>`}
         </div>
       </section>
       <section class="fit-browser-section">
-        <div class="fit-browser-section-title">Saved fits</div>
+        <div class="fit-browser-section-title">Saved fits <span class="fit-browser-section-count">${formatNumber(saved.length)}</span></div>
         <div class="fit-browser-grid">
           ${saved.length ? saved.map((fit) => renderFitCard(fit, "saved")).join("") : `<div class="empty-state">No saved fits match the current scope.</div>`}
         </div>
@@ -494,21 +1247,86 @@ export function createFitterController({ state, dom, helpers, selectors, actions
 
     fitBrowserList.querySelectorAll("[data-load-fit-browser]").forEach((card) => {
       card.addEventListener("click", (event) => {
-        if (event.target.closest("[data-delete-fit]")) {
+        if (
+          event.target.closest("[data-delete-fit]") ||
+          event.target.closest("[data-share-fit-browser]") ||
+          event.target.closest("[data-load-fit-button]") ||
+          event.target.closest("[data-compare-fit-browser]")
+        ) {
           return;
         }
         const type = card.dataset.fitType;
         if (type === "preset") {
           const fit = (state.bootstrap?.fits?.presets || []).find((item) => item.id === card.dataset.loadFitBrowser);
           if (fit) {
-            loadShipIntoFitter(fit.shipName, fit.loadout || getStockLoadout(fit.shipName));
+            loadShipIntoFitter(fit.shipName, fit.loadout || getStockLoadout(fit.shipName), null, {
+              name: fit.name,
+              note: fit.note,
+            });
           }
         } else {
           const fit = (state.bootstrap?.fits?.saved || []).find((item) => item.id === card.dataset.loadFitBrowser);
           if (fit) {
-            loadShipIntoFitter(fit.shipName, fit.loadout);
+            loadShipIntoFitter(fit.shipName, fit.loadout, null, {
+              name: fit.name,
+              note: fit.note,
+            });
           }
         }
+      });
+    });
+
+    fitBrowserList.querySelectorAll("[data-load-fit-button]").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const type = button.dataset.fitType;
+        const source = type === "preset" ? state.bootstrap?.fits?.presets || [] : state.bootstrap?.fits?.saved || [];
+        const fit = source.find((item) => item.id === button.dataset.loadFitButton);
+        if (!fit) {
+          return;
+        }
+        const loadout = type === "preset" ? fit.loadout || getStockLoadout(fit.shipName) : fit.loadout;
+        loadShipIntoFitter(fit.shipName, loadout, null, {
+          name: fit.name,
+          note: fit.note,
+        });
+      });
+    });
+
+    fitBrowserList.querySelectorAll("[data-share-fit-browser]").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const type = button.dataset.fitType;
+        const source = type === "preset" ? state.bootstrap?.fits?.presets || [] : state.bootstrap?.fits?.saved || [];
+        const fit = source.find((item) => item.id === button.dataset.shareFitBrowser);
+        if (!fit) {
+          return;
+        }
+        openFitShareModal({
+          shipName: fit.shipName,
+          name: fit.name,
+          note: fit.note,
+          loadout: fit.loadout,
+        });
+      });
+    });
+
+    fitBrowserList.querySelectorAll("[data-compare-fit-browser]").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const type = button.dataset.fitType;
+        const source = type === "preset" ? state.bootstrap?.fits?.presets || [] : state.bootstrap?.fits?.saved || [];
+        const fit = source.find((item) => item.id === button.dataset.compareFitBrowser);
+        if (!fit) {
+          return;
+        }
+        if (state.fitShipName !== fit.shipName) {
+          loadShipIntoFitter(fit.shipName, fit.loadout || getStockLoadout(fit.shipName), null, {
+            name: fit.name,
+            note: fit.note,
+          });
+        }
+        requestAnimationFrame(() => openFitCompareModal(`${type}:${fit.id}`));
       });
     });
 
@@ -618,7 +1436,10 @@ export function createFitterController({ state, dom, helpers, selectors, actions
         const shipId = button.dataset.ownedShip;
         const ship = ships.find((candidate) => (candidate.uuid || `${candidate.model}-${candidate.name}`) === shipId);
         if (ship) {
-          loadShipIntoFitter(ship.model, ship.outfits, shipId);
+          loadShipIntoFitter(ship.model, ship.outfits, shipId, {
+            name: `${ship.model} fit`,
+            note: `Loaded from ${ship.name}`,
+          });
         }
       });
     });
@@ -641,29 +1462,66 @@ export function createFitterController({ state, dom, helpers, selectors, actions
     const saleTags = availability.tags
       .map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`)
       .join("");
+    const fitTitle = state.fitDraftName && state.fitDraftName !== ship.name ? state.fitDraftName : "";
+    const fitNote = state.fitDraftNote || "";
+    const displayTitle = fitTitle || ship.name;
+    const validityLabel = summary.valid ? "Fit valid" : "Fit blocked";
+    const headerStats = [
+      { label: "Speed", value: formatOneDecimal(summary.maxSpeed) },
+      { label: "Cargo", value: `${formatNumber(summary.cargoSpace)} t` },
+      { label: "Jumps", value: formatNumber(summary.jumpCount) },
+      { label: "Crew", value: `${formatNumber(summary.requiredCrew)} / ${formatNumber(summary.bunks)}` },
+      { label: "Value", value: formatCredits(summary.totalCost) },
+      { label: "Outfit free", value: formatRemaining(summary.freeOutfit) },
+    ];
 
     fitHeader.innerHTML = `
-      <div class="fit-hero-row">
-        <div class="fit-hero-media">
-          ${ship.thumbnailUrl
-            ? `<img class="fit-hero-image-inline" src="${escapeHtml(ship.thumbnailUrl)}" alt="${escapeHtml(ship.name)}" />`
-            : `<div class="fit-hero-image-inline fit-hero-placeholder"></div>`}
-        </div>
-        <div class="fit-hero-body">
-          <div class="eyebrow">${escapeHtml(ship.category)}</div>
-          <h2>${escapeHtml(ship.name)}</h2>
-          <p class="fit-description">${escapeHtml(ship.description || "No description available.")}</p>
-          <p class="fit-description muted">${escapeHtml(availability.label)}</p>
-          ${saleTags ? `<div class="fit-header-tags">${saleTags}</div>` : ""}
-          <div class="fit-header-meta">
-            <div class="metric-pill">Fit value <strong>${formatCredits(summary.totalCost)}</strong></div>
-            <div class="metric-pill">Outfit delta <strong>${summary.outfitDeltaCost >= 0 ? "+" : "-"}${formatCredits(Math.abs(summary.outfitDeltaCost))}</strong></div>
-            <div class="metric-pill">Hull price <strong>${formatCredits(ship.attributes.cost || 0)}</strong></div>
-            ${ship.licenses?.length ? `<div class="metric-pill">License <strong>${escapeHtml(ship.licenses.join(", "))}</strong></div>` : ""}
-            <div class="metric-pill">Source <strong>${escapeHtml(liveShipLabel)}</strong></div>
+      <section class="fit-hero-card ${summary.valid ? "" : "is-invalid"}">
+        <div class="fit-hero-topline">
+          <div class="fit-hero-titleblock">
+            <div class="eyebrow">${escapeHtml(ship.category)}</div>
+            <h2>${escapeHtml(displayTitle)}</h2>
+            <div class="fit-hero-identity">${fitTitle ? `${escapeHtml(ship.name)} · ${escapeHtml(ship.category)}` : `${escapeHtml(ship.category)} hull`}</div>
+          </div>
+          <div class="fit-hero-status">
+            <span class="tag ${summary.valid ? "is-owned" : "is-invalid"}">${escapeHtml(validityLabel)}</span>
+            <span class="tag">${escapeHtml(liveShipLabel)}</span>
           </div>
         </div>
-      </div>
+        <div class="fit-hero-row">
+          <div class="fit-hero-media">
+            ${ship.thumbnailUrl
+              ? `<img class="fit-hero-image-inline" src="${escapeHtml(ship.thumbnailUrl)}" alt="${escapeHtml(ship.name)}" />`
+              : `<div class="fit-hero-image-inline fit-hero-placeholder"></div>`}
+          </div>
+          <div class="fit-hero-body">
+            <div class="fit-hero-copyblock">
+              ${fitNote ? `<p class="fit-description fit-description-strong">${escapeHtml(fitNote)}</p>` : ""}
+              <p class="fit-description">${escapeHtml(ship.description || "No description available.")}</p>
+              <p class="fit-description muted">${escapeHtml(availability.label)}</p>
+              ${saleTags ? `<div class="fit-header-tags">${saleTags}</div>` : ""}
+            </div>
+            <div class="fit-hero-stats">
+              ${headerStats
+                .map(
+                  (item) => `
+                    <div class="fit-hero-stat">
+                      <div class="fit-hero-stat-label">${escapeHtml(item.label)}</div>
+                      <div class="fit-hero-stat-value">${escapeHtml(item.value)}</div>
+                    </div>
+                  `
+                )
+                .join("")}
+            </div>
+            <div class="fit-header-meta">
+              <div class="metric-pill">Outfit delta <strong>${summary.outfitDeltaCost >= 0 ? "+" : "-"}${formatCredits(Math.abs(summary.outfitDeltaCost))}</strong></div>
+              <div class="metric-pill">Hull price <strong>${formatCredits(ship.attributes.cost || 0)}</strong></div>
+              ${ship.licenses?.length ? `<div class="metric-pill">License <strong>${escapeHtml(ship.licenses.join(", "))}</strong></div>` : ""}
+              <div class="metric-pill">Source <strong>${escapeHtml(liveShipLabel)}</strong></div>
+            </div>
+          </div>
+        </div>
+      </section>
     `;
   }
 
@@ -988,6 +1846,7 @@ export function createFitterController({ state, dom, helpers, selectors, actions
   }
 
   function renderFitter() {
+    updateFitCommandState();
     fitterBrowserPane?.classList.toggle("is-active", state.fitterPane !== "modules");
     fitterModulesPane?.classList.toggle("is-active", state.fitterPane === "modules");
     renderFitBrowser();
@@ -1004,6 +1863,10 @@ export function createFitterController({ state, dom, helpers, selectors, actions
     outfitSearch?.addEventListener("input", renderOutfitCatalog);
     outfitCategory?.addEventListener("change", renderOutfitCatalog);
     saveFitButton?.addEventListener("click", openFitSaveModal);
+    compareFitButton?.addEventListener("click", () => openFitCompareModal());
+    shareFitButton?.addEventListener("click", () => openFitShareModal());
+    importFitButton?.addEventListener("click", openFitImportModal);
+    resetFitButton?.addEventListener("click", resetCurrentFit);
     fitSaveSubmit?.addEventListener("click", saveCurrentFit);
     fitSaveCancel?.addEventListener("click", closeFitSaveModal);
     fitSaveNote?.addEventListener("input", updateFitSaveCharcount);
@@ -1016,6 +1879,42 @@ export function createFitterController({ state, dom, helpers, selectors, actions
     });
     fitSaveModal?.querySelectorAll("[data-modal-close='fit-save']").forEach((element) => {
       element.addEventListener("click", closeFitSaveModal);
+    });
+    fitShareFormat?.addEventListener("change", renderFitShareModal);
+    fitShareCancel?.addEventListener("click", closeFitShareModal);
+    fitShareCopy?.addEventListener("click", copyFitShareOutput);
+    fitShareDownload?.addEventListener("click", downloadFitShareImage);
+    fitImportCancel?.addEventListener("click", closeFitImportModal);
+    fitImportSubmit?.addEventListener("click", loadImportedFit);
+    fitImportInput?.addEventListener("input", () => showFitShareStatus(fitImportStatus, "", "info"));
+    fitShareModal?.querySelectorAll("[data-modal-close='fit-share']").forEach((element) => {
+      element.addEventListener("click", closeFitShareModal);
+    });
+    fitShareModal?.addEventListener("click", (event) => {
+      if (event.target === fitShareModal) {
+        closeFitShareModal();
+      }
+    });
+    fitImportModal?.querySelectorAll("[data-modal-close='fit-import']").forEach((element) => {
+      element.addEventListener("click", closeFitImportModal);
+    });
+    fitImportModal?.addEventListener("click", (event) => {
+      if (event.target === fitImportModal) {
+        closeFitImportModal();
+      }
+    });
+    fitCompareTarget?.addEventListener("change", () => {
+      fitCompareTargetKey = fitCompareTarget.value;
+      renderFitCompareModal();
+    });
+    fitCompareCancel?.addEventListener("click", closeFitCompareModal);
+    fitCompareModal?.querySelectorAll("[data-modal-close='fit-compare']").forEach((element) => {
+      element.addEventListener("click", closeFitCompareModal);
+    });
+    fitCompareModal?.addEventListener("click", (event) => {
+      if (event.target === fitCompareModal) {
+        closeFitCompareModal();
+      }
     });
     fitShipCategory?.addEventListener("change", () => {
       state.fitShipCategory = fitShipCategory.value || "all";
@@ -1039,5 +1938,8 @@ export function createFitterController({ state, dom, helpers, selectors, actions
     renderFitBrowser,
     bindFitterEvents,
     closeFitSaveModal,
+    closeFitShareModal,
+    closeFitImportModal,
+    closeFitCompareModal,
   };
 }

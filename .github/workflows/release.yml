@@ -21,6 +21,8 @@ jobs:
             label: macOS
           - os: windows-2022
             label: Windows
+          - os: ubuntu-22.04
+            label: Linux
 
     steps:
       - name: Checkout
@@ -34,6 +36,12 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Install Linux packaging tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libarchive-tools rpm
 
       - name: Build distributables
         run: npm run dist -- --publish never
@@ -49,6 +57,8 @@ jobs:
             find dist -maxdepth 1 -type f \( -name "*.dmg" -o -name "*-mac.zip" \) -exec cp {} release-assets/ \;
           elif [[ "$RUNNER_OS" == "Windows" ]]; then
             find dist -maxdepth 1 -type f \( -name "*.exe" -o -name "*.zip" \) -exec cp {} release-assets/ \;
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            find dist -maxdepth 1 -type f \( -name "*.AppImage" -o -name "*.deb" \) -exec cp {} release-assets/ \;
           fi
           ls -la release-assets
 
@@ -66,4 +76,5 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
           files: release-assets/*
