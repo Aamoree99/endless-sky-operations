@@ -26,6 +26,7 @@ export function createFleetController({ state, dom, helpers, selectors, actions 
     normalizeShipDisplayShip,
     formatSaleLocation,
     getOutfitDefinition,
+    findShortestPath,
   } = selectors;
   const {
     loadShipIntoFitter,
@@ -198,6 +199,45 @@ export function createFleetController({ state, dom, helpers, selectors, actions 
           .join("")
       : `<div class="empty-state">This group already matches the target fit.</div>`;
 
+    const routeStops = preview.routePlan?.stops || [];
+    const routeMarkup = routeStops.length
+      ? `
+        <section class="fleet-rollout-section">
+          <div class="fleet-rollout-section-title">Outfitter route</div>
+          <div class="fleet-rollout-list">
+            ${routeStops.map((stop, index) => `
+              <div class="fleet-rollout-item fleet-rollout-stop">
+                <span>
+                  <span class="fleet-rollout-stop-index">${index + 1}</span>
+                  ${escapeHtml(stop.planet)}
+                  <span class="fleet-rollout-stop-system muted">${escapeHtml(stop.system)}</span>
+                </span>
+                <span>${stop.jumps === 0 ? "Here" : `${formatNumber(stop.jumps)} jump${stop.jumps !== 1 ? "s" : ""}`}</span>
+              </div>
+              ${stop.items.map((item) => `
+                <div class="fleet-rollout-item fleet-rollout-stop-item">
+                  <span class="muted">  ↳ ${escapeHtml(item.name)}</span>
+                  <span class="muted">Buy ${formatNumber(item.buyCount)}</span>
+                </div>
+              `).join("")}
+            `).join("")}
+            ${preview.routePlan.unresolvedStops?.length
+              ? preview.routePlan.unresolvedStops.map((stop) => `
+                  <div class="fleet-rollout-item is-missing">
+                    <span>${escapeHtml(stop.planet)} — no path found</span>
+                    <span>${stop.items.map((item) => escapeHtml(item.name)).join(", ")}</span>
+                  </div>
+                `).join("")
+              : ""
+            }
+          </div>
+        </section>
+      `
+      : "";
+
+    const hasTravelCost = preview.travelCost > 0;
+    const totalCost = preview.purchaseCost + (preview.travelCost || 0);
+
     fleetRolloutPreview.innerHTML = `
       <div class="fleet-rollout-head">
         <div>
@@ -206,7 +246,9 @@ export function createFleetController({ state, dom, helpers, selectors, actions 
         </div>
         <div class="pill-row">
           <div class="metric-pill">Ships to change <strong>${formatNumber(preview.changedShipCount)}</strong></div>
-          <div class="metric-pill">Purchase cost <strong>${formatCredits(preview.purchaseCost)}</strong></div>
+          <div class="metric-pill">Outfit cost <strong>${formatCredits(preview.purchaseCost)}</strong></div>
+          ${hasTravelCost ? `<div class="metric-pill">Travel cost <strong>${formatCredits(preview.travelCost)}</strong></div>` : ""}
+          <div class="metric-pill ${totalCost > 0 ? "" : ""}">Total cost <strong>${formatCredits(totalCost)}</strong></div>
           ${targetSummary ? `<div class="metric-pill">Target cargo <strong>${formatNumber(targetSummary.cargoSpace)}</strong></div>` : ""}
           ${targetSummary ? `<div class="metric-pill">Target jumps <strong>${formatNumber(targetSummary.jumpCount)}</strong></div>` : ""}
         </div>
@@ -217,16 +259,26 @@ export function createFleetController({ state, dom, helpers, selectors, actions 
         <span>Outfitter <strong>${preview.currentPlanet?.hasOutfitter ? "Available" : "Missing"}</strong></span>
         <span>Credits <strong>${formatCredits(state.status?.player?.credits || 0)}</strong></span>
       </div>
+      ${hasTravelCost
+        ? `<div class="fleet-rollout-travel-note">
+            Ships selected for refit: ${formatNumber(preview.changedShipCount)} &nbsp;·&nbsp;
+            Salary/day: ${formatCredits(preview.selectedSalaryPerDay)} &nbsp;·&nbsp;
+            Navigator fee (10%): ${formatCredits(preview.navigatorFeePerDay)}/day &nbsp;·&nbsp;
+            Route: ${formatNumber(preview.routePlan?.totalJumps || 0)} jump${(preview.routePlan?.totalJumps || 0) !== 1 ? "s" : ""}
+          </div>`
+        : ""
+      }
       ${blockerMarkup}
       <section class="fleet-rollout-section">
         <div class="fleet-rollout-section-title">Outfit delta</div>
         <div class="fleet-rollout-list">${itemRows}</div>
       </section>
+      ${routeMarkup}
       ${
         preview.changedShips.length
           ? `
             <section class="fleet-rollout-section">
-              <div class="fleet-rollout-section-title">Ships that will change</div>
+              <div class="fleet-rollout-section-title">Ships that will change (${formatNumber(preview.changedShipCount)})</div>
               <div class="fleet-rollout-list">
                 ${preview.changedShips
                   .map(
@@ -267,14 +319,17 @@ export function createFleetController({ state, dom, helpers, selectors, actions 
     }
 
     const currentPlanet = getCurrentPlanetRecord();
+    const currentSystemName = state.status?.player?.currentSystem || null;
     const preview = buildFleetRolloutPreview({
       group,
       targetLoadout: target.loadout,
       liveMode: !state.debugMode,
+      currentSystemName,
       currentPlanet,
       currentOutfitItems: currentPlanet?.outfitItems || [],
       currentCredits: Number(state.status?.player?.credits) || 0,
       getOutfitDefinition,
+      findShortestPath: findShortestPath || (() => []),
     });
 
     state.fleetRolloutDraft = {
@@ -326,8 +381,15 @@ export function createFleetController({ state, dom, helpers, selectors, actions 
       })),
     };
 
-    if (!state.debugMode && draft.preview.purchaseCost > 0) {
-      payload.credits = Math.max(0, (Number(state.status?.player?.credits) || 0) - draft.preview.purchaseCost);
+    const totalCost = draft.preview.purchaseCost + (draft.preview.travelCost || 0);
+    if (!state.debugMode && totalCost > 0) {
+      payload.credits = Math.max(0, (Number(state.status?.player?.credits) || 0) - totalCost);
+    }
+
+    const travelDays = draft.preview.routePlan?.totalJumps || 0;
+    if (!state.debugMode && travelDays > 0 && state.status?.player?.date) {
+      payload.travelDays = travelDays;
+      payload.currentDate = state.status.player.date;
     }
 
     const response = await fetch("/api/save-editor", {

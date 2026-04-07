@@ -3631,6 +3631,40 @@ function patchCreditsInSave(raw, credits) {
   });
 }
 
+function advanceGameDate({ day, month, year }, daysToAdd) {
+  const MONTHS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  function isLeap(y) { return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0; }
+  let d = day, m = month, y = year;
+  let remaining = Math.max(0, Math.round(daysToAdd));
+  while (remaining > 0) {
+    const daysInMonth = MONTHS[m - 1] + (m === 2 && isLeap(y) ? 1 : 0);
+    const available = daysInMonth - d;
+    if (remaining <= available) {
+      d += remaining;
+      remaining = 0;
+    } else {
+      remaining -= available + 1;
+      d = 1;
+      m += 1;
+      if (m > 12) { m = 1; y += 1; }
+    }
+  }
+  return { day: d, month: m, year: y };
+}
+
+function patchDateInSave(raw, currentDate, travelDays) {
+  const next = advanceGameDate(currentDate, travelDays);
+  const lines = raw.split("\n");
+  const idx = lines.findIndex((line) => line.startsWith("date "));
+  const newLine = `date ${next.day} ${next.month} ${next.year}`;
+  if (idx !== -1) {
+    lines[idx] = newLine;
+  } else {
+    lines.unshift(newLine);
+  }
+  return lines.join("\n");
+}
+
 function patchPlayerLocationInSave(raw, locationPatch) {
   let next = raw;
   if (locationPatch.currentSystem !== undefined) {
@@ -3884,6 +3918,11 @@ async function applySaveEdits(savePath, payload) {
   if (payload.credits !== undefined) {
     raw = patchCreditsInSave(raw, payload.credits);
     applied.push("credits");
+  }
+
+  if (payload.travelDays > 0 && payload.currentDate) {
+    raw = patchDateInSave(raw, payload.currentDate, payload.travelDays);
+    applied.push("date");
   }
 
   if (

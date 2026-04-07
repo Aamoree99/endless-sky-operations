@@ -6993,6 +6993,45 @@ textarea {
   gap: 8px;
 }
 
+.fleet-rollout-travel-note {
+  padding: 9px 13px;
+  border: 1px solid rgba(246, 214, 127, 0.18);
+  background: rgba(246, 214, 127, 0.05);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.fleet-rollout-stop {
+  border-color: rgba(154, 205, 178, 0.22) !important;
+}
+
+.fleet-rollout-stop-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(154, 205, 178, 0.18);
+  color: #9dcdb2;
+  font-size: 11px;
+  font-weight: 700;
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+
+.fleet-rollout-stop-system {
+  margin-left: 6px;
+  font-size: 12px;
+}
+
+.fleet-rollout-stop-item {
+  padding: 6px 12px 6px 24px !important;
+  border-color: rgba(154, 205, 178, 0.1) !important;
+  background: rgba(13, 19, 30, 0.42) !important;
+}
+
 .modal-copy[data-tone="success"] {
   color: rgba(151, 210, 175, 0.98);
 }

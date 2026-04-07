@@ -4,7 +4,10 @@
   "private": true,
   "type": "module",
   "description": "Local Endless Sky planner, fitter, wiki, and save-aware desktop utility.",
-  "author": "Ilia",
+  "author": {
+    "name": "Ilia",
+    "email": "aamoree99@gmail.com"
+  },
   "main": "electron/main.mjs",
   "scripts": {
     "start": "node server.mjs",
@@ -51,6 +54,7 @@
     },
     "linux": {
       "icon": "icons/png",
+      "maintainer": "Ilia <aamoree99@gmail.com>",
       "target": [
         "AppImage",
         "deb"

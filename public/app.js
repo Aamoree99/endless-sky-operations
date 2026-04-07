@@ -544,7 +544,23 @@ const fleetController = createFleetController({
     summarizeFit,
     normalizeShipDisplayShip,
     formatSaleLocation,
-    getOutfitDefinition,
+    getOutfitDefinition: (name) => {
+      const base = getOutfitDefinition(name);
+      if (!base) {
+        return null;
+      }
+      const wiki = (state.status?.wiki?.outfits || []).find((o) => o.name === name);
+      if (!wiki) {
+        return base;
+      }
+      return {
+        ...base,
+        progressSaleLocations: wiki.progressSaleLocations || [],
+        currentSaleLocations: wiki.currentSaleLocations || [],
+        knownSaleLocations: wiki.knownSaleLocations || [],
+      };
+    },
+    findShortestPath,
   },
   actions: {
     loadShipIntoFitter,
