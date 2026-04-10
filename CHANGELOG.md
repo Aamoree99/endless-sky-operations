@@ -1,37 +1,62 @@
 # Changelog
 
+## v0.4.1
+
+### Improved
+- Fleet rollout now reads like an actual operation instead of a vague preview. You can see which ships are changing, which stops they take, what gets sold, what gets bought, travel cost, net cost, final credits, and where those ships end up.
+- Rollout is easier to spot in the fleet UI, and the app now says why `Apply current fit` is disabled when the fitter is on the wrong hull.
+- Desktop startup is quicker. The window can open after a cheap health check while the heavier bootstrap and status data keep loading in the background.
+- Packaged desktop startup is more reliable because Electron now launches the backend and preload from the unpacked runtime root instead of assuming everything lives inside `app.asar`.
+
+### Changed
+- Applying a rollout now updates more of the save in one pass: credits, date, ship loadouts, and final ship location.
+- Desktop packaging was cleaned up for a stable release path:
+  - `asar` is back on
+  - server files are unpacked explicitly where needed
+  - release assets now use `ES-Operations-*`
+  - the package name now matches `es-operations`
+- The backend is no longer one giant file. Routes, status builders, save parsing, save editing, game-data loading, fit storage, and helpers live in separate modules now.
+
+### Fixed
+- Fixed an early-loading crash caused by old fitter DOM references like `fit-owned-ships`.
+- Fixed the startup error fallback so one launch error does not immediately throw a second null-DOM error on top of it.
+- Fixed packaged macOS builds failing to launch because the backend was starting from the wrong runtime path or missing packaged server files.
+
+### Added
+- Added basic smoke tests for the server modules.
+- Added `/api/healthz` so the desktop app can do a lightweight readiness check before the heavier data loads.
+
 ## v0.4.0 beta
 
 ### Added
-- Fit sharing in text, markdown, BBCode, JSON, and machine-readable share-code formats.
-- Fit import flow that auto-detects supported payload formats instead of forcing one input style.
-- Fit comparison modal with stat deltas and loadout diffs.
-- Profile-card image export for sharing builds outside the app.
+- Added fit sharing in plain text, markdown, Steam BBCode, JSON, and a machine-readable share code.
+- Added fit import that figures out the format from pasted text instead of making you pick one first.
+- Added fit comparison with stat deltas and loadout diffs.
+- Added a profile-card image export for posting fits outside the app.
 - Fleet rollout tools for applying the current fit to a whole ship group or normalizing a series.
-- Platform icon assets for macOS, Windows, and Linux builds.
-- Fleet rollout route planning: calculates the optimal path to outfitter stops for required ship upgrades using the shortest-path graph.
-- Outfitter route itinerary in the rollout modal: numbered stops with system name, jump count, and items to buy at each location.
-- Travel cost breakdown in rolling preview: daily crew salary × route jumps + 10% navigator commission.
-- In-game date advancement: applying a rollout now moves the save file date forward by the number of jumps in the planned route.
+- Added icon assets for macOS, Windows, and Linux builds.
+- Added rollout route planning, so the app can work out the shortest outfitter path for the pieces a group still needs.
+- Added stop-by-stop rollout routing in the modal, with systems, jump counts, and the items bought at each stop.
+- Added travel cost to rollout preview: crew salary per day across route jumps plus a 10% navigator fee.
+- Added in-game date advancement when a rollout is applied.
 
 ### Improved
-- Fitter header, fit actions, and saved-fit cards were redesigned to read more like a product UI and less like a debug panel.
-- Fleet groups now show rollout readiness and fit drift more clearly.
-- Share, import, and compare modals now scroll correctly in smaller windows and close on outside click.
+- The fitter got a cleaner layout. Header, actions, and saved-fit cards now read like product UI instead of a debug screen.
+- Fleet groups do a better job showing rollout readiness and fit drift.
+- Share, import, and compare modals now scroll properly in smaller windows and close when you click outside them.
 - Desktop branding now presents the app as `ES: Operations`.
-- Rollout modal header now shows separate **Outfit cost**, **Travel cost**, and **Total cost** pills alongside target cargo and jump stats.
-- Rollout modal shows a summary bar with ships selected for refit, salary/day, navigator fee rate, and total route jumps.
+- The rollout modal got a better top-line summary with costs, target cargo, jump count, salary/day, and navigator fee.
 
 ### Changed
-- macOS packaging now uses a proper app icon and display name while keeping the helper bundle naming valid.
-- Linux release packaging has been prepared in the release workflow.
-- Applying a fleet rollout now deducts the full economic cost (outfit purchases + travel expenses) from the player's credits.
+- macOS packaging now uses a proper app icon and display name without breaking helper bundle naming.
+- Linux packaging was wired into the release workflow.
+- Applying a fleet rollout now actually deducts the economic cost instead of treating it like a free fit swap.
 
 ### Fixed
-- Outfit sale location lookup in rollout now correctly merges live `progressSaleLocations` from the wiki into the outfit definition so Hai, Remnant, and other faction outfitter stops are resolved correctly when building the route.
+- Fixed rollout sale-location lookup so live `progressSaleLocations` from the wiki are merged correctly. Hai, Remnant, and other faction outfitter stops now resolve properly when building the route.
 
 ### Notes
-- This is a beta release. The main workflows are in place, but this cut is meant for real use and UI validation before a later stable pass.
+- This was the first real beta cut for daily use. The main workflows were already there, but it still needed UI and packaging cleanup before a stable release.
 
 
 ## v0.3.0

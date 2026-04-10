@@ -8,8 +8,19 @@ let serverProcess = null;
 let serverPort = null;
 let quitting = false;
 
+function getAppRuntimeRoot() {
+  if (!app.isPackaged) {
+    return app.getAppPath();
+  }
+  return path.join(process.resourcesPath, "app.asar.unpacked");
+}
+
 function getServerEntry() {
-  return path.join(app.getAppPath(), "server.mjs");
+  return path.join(getAppRuntimeRoot(), "server.mjs");
+}
+
+function getServerCwd() {
+  return getAppRuntimeRoot();
 }
 
 function getCacheDir() {
@@ -37,11 +48,11 @@ async function waitForServer(port) {
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/api/bootstrap`, { cache: "no-store" });
+      const response = await fetch(`http://127.0.0.1:${port}/api/healthz`, { cache: "no-store" });
       if (response.ok) {
         return;
       }
-      lastError = new Error(`Bootstrap returned ${response.status}.`);
+      lastError = new Error(`Health check returned ${response.status}.`);
     } catch (error) {
       lastError = error;
     }
@@ -62,7 +73,7 @@ async function startServer() {
     ENDLESS_SKY_APP_CACHE_DIR: getCacheDir(),
   };
   serverProcess = spawn(process.execPath, [getServerEntry()], {
-    cwd: app.getAppPath(),
+    cwd: getServerCwd(),
     env,
     stdio: "inherit",
   });
@@ -102,7 +113,7 @@ async function createWindow() {
     title: "ES: Operations",
     webPreferences: {
       contextIsolation: true,
-      preload: path.join(app.getAppPath(), "electron", "preload.mjs"),
+      preload: path.join(getAppRuntimeRoot(), "electron", "preload.mjs"),
     },
   });
   await mainWindow.loadURL(`http://127.0.0.1:${serverPort}`);

@@ -979,8 +979,8 @@ async function init() {
   state.debugAutoBackup = loadDebugBackupPreference();
   attachStaticEvents();
   syncPageFromHash();
-  await fetchBootstrap();
-  await fetchStatus();
+  rerenderAll();
+  await Promise.all([fetchBootstrap(), fetchStatus()]);
   rerenderAll();
   setInterval(async () => {
     try {
@@ -994,5 +994,7 @@ async function init() {
 
 init().catch((error) => {
   console.error(error);
-  heroMeta.innerHTML = `<div class="meta-pill error">${escapeHtml(error.message || String(error))}</div>`;
+  if (heroMeta) {
+    heroMeta.innerHTML = `<div class="meta-pill error">${escapeHtml(error.message || String(error))}</div>`;
+  }
 });

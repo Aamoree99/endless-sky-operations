@@ -1,6 +1,6 @@
 {
-  "name": "endless-sky-trade-app",
-  "version": "0.4.0",
+  "name": "es-operations",
+  "version": "0.4.1",
   "private": true,
   "type": "module",
   "description": "Local Endless Sky planner, fitter, wiki, and save-aware desktop utility.",
@@ -11,6 +11,7 @@
   "main": "electron/main.mjs",
   "scripts": {
     "start": "node server.mjs",
+    "test": "node --test",
     "cache-game-data": "node scripts/cache-endless-sky-data.mjs",
     "desktop": "electron .",
     "pack": "electron-builder --dir",
@@ -23,11 +24,19 @@
   "build": {
     "appId": "com.ilia.endlesssky.operations",
     "productName": "ES Operations",
-    "asar": false,
+    "asar": true,
+    "asarUnpack": [
+      "server.mjs",
+      "server/**/*",
+      "package.json",
+      "public/**/*",
+      "electron/preload.mjs"
+    ],
     "files": [
       "electron/**/*",
       "public/**/*",
       "server.mjs",
+      "server/**/*",
       "package.json",
       "README.md"
     ],
@@ -36,6 +45,7 @@
     },
     "mac": {
       "icon": "icons/mac/icon.icns",
+      "artifactName": "ES-Operations-${version}-${arch}-mac.${ext}",
       "extendInfo": {
         "CFBundleDisplayName": "ES: Operations"
       },
@@ -55,14 +65,20 @@
     "linux": {
       "icon": "icons/png",
       "maintainer": "Ilia <aamoree99@gmail.com>",
+      "artifactName": "ES-Operations-${version}-${arch}.${ext}",
+      "executableName": "es-operations",
       "target": [
         "AppImage",
         "deb"
       ]
     },
     "nsis": {
+      "artifactName": "ES-Operations-Setup-${version}.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
+    },
+    "portable": {
+      "artifactName": "ES-Operations-Portable-${version}.${ext}"
     }
   }
 }

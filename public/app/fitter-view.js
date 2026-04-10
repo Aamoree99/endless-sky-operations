@@ -1532,7 +1532,9 @@ export function createFitterController({ state, dom, helpers, selectors, actions
       fitLoadout.innerHTML = "";
       outfitCatalog.innerHTML = "";
       fitSelection.innerHTML = "";
-      fitOwnedShips.innerHTML = "";
+      if (fitOwnedShips) {
+        fitOwnedShips.innerHTML = "";
+      }
       if (fitOwnedShipsCompact) {
         fitOwnedShipsCompact.innerHTML = "";
       }

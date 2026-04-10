@@ -192,7 +192,12 @@ export function createFleetController({ state, dom, helpers, selectors, actions 
             (item) => `
               <div class="fleet-rollout-item ${item.buyCount > 0 && !item.soldHere && preview.liveMode ? "is-missing" : ""}">
                 <span>${escapeHtml(item.name)}</span>
-                <span>${item.buyCount > 0 ? `Buy ${formatNumber(item.buyCount)}` : item.freeCount > 0 ? `Free ${formatNumber(item.freeCount)}` : "No change"}</span>
+                <span>
+                  ${item.buyCount > 0 ? `Buy ${formatNumber(item.buyCount)}${item.localBuyCost || item.remoteBuyCost ? ` · ${escapeHtml(formatCredits(item.localBuyCost || item.remoteBuyCost))}` : ""}` : ""}
+                  ${item.buyCount > 0 && item.freeCount > 0 ? " / " : ""}
+                  ${item.freeCount > 0 ? `Sell ${formatNumber(item.freeCount)}${item.saleCredit ? ` · ${escapeHtml(formatCredits(item.saleCredit))}` : ""}` : ""}
+                  ${item.buyCount <= 0 && item.freeCount <= 0 ? "No change" : ""}
+                </span>
               </div>
             `
           )
@@ -203,7 +208,7 @@ export function createFleetController({ state, dom, helpers, selectors, actions 
     const routeMarkup = routeStops.length
       ? `
         <section class="fleet-rollout-section">
-          <div class="fleet-rollout-section-title">Outfitter route</div>
+          <div class="fleet-rollout-section-title">Route plan</div>
           <div class="fleet-rollout-list">
             ${routeStops.map((stop, index) => `
               <div class="fleet-rollout-item fleet-rollout-stop">
@@ -212,20 +217,30 @@ export function createFleetController({ state, dom, helpers, selectors, actions 
                   ${escapeHtml(stop.planet)}
                   <span class="fleet-rollout-stop-system muted">${escapeHtml(stop.system)}</span>
                 </span>
-                <span>${stop.jumps === 0 ? "Here" : `${formatNumber(stop.jumps)} jump${stop.jumps !== 1 ? "s" : ""}`}</span>
+                <span>${stop.jumps === 0 ? "Here" : `${formatNumber(stop.jumps)} jump${stop.jumps !== 1 ? "s" : ""}`} · ${formatCredits(stop.jumpCost || 0)}</span>
               </div>
-              ${stop.items.map((item) => `
+              ${(stop.sells || []).map((item) => `
                 <div class="fleet-rollout-item fleet-rollout-stop-item">
-                  <span class="muted">  ↳ ${escapeHtml(item.name)}</span>
-                  <span class="muted">Buy ${formatNumber(item.buyCount)}</span>
+                  <span class="muted">  ↳ Sell ${formatNumber(item.freeCount)} × ${escapeHtml(item.name)}</span>
+                  <span class="good">+${escapeHtml(formatCredits(item.saleCredit || 0))}</span>
                 </div>
               `).join("")}
+              ${(stop.buys || []).map((item) => `
+                <div class="fleet-rollout-item fleet-rollout-stop-item ${item.buyCount > 0 && !item.soldHere && preview.liveMode ? "is-missing" : ""}">
+                  <span class="muted">  ↳ Buy ${formatNumber(item.buyCount)} × ${escapeHtml(item.name)} <span class="muted">(${escapeHtml(item.pricing || "List price")})</span></span>
+                  <span>${escapeHtml(formatCredits(item.buyCost || 0))}</span>
+                </div>
+              `).join("")}
+              <div class="fleet-rollout-item fleet-rollout-stop-item">
+                <span class="muted">  ↳ Stop total</span>
+                <span>${stop.saleCredit ? `<span class="good">-${escapeHtml(formatCredits(stop.saleCredit))}</span> / ` : ""}${escapeHtml(formatCredits(stop.buyCost || 0))}</span>
+              </div>
             `).join("")}
             ${preview.routePlan.unresolvedStops?.length
               ? preview.routePlan.unresolvedStops.map((stop) => `
                   <div class="fleet-rollout-item is-missing">
                     <span>${escapeHtml(stop.planet)} — no path found</span>
-                    <span>${stop.items.map((item) => escapeHtml(item.name)).join(", ")}</span>
+                    <span>${[...(stop.buys || []), ...(stop.sells || [])].map((item) => escapeHtml(item.name)).join(", ")}</span>
                   </div>
                 `).join("")
               : ""
@@ -236,7 +251,7 @@ export function createFleetController({ state, dom, helpers, selectors, actions 
       : "";
 
     const hasTravelCost = preview.travelCost > 0;
-    const totalCost = preview.purchaseCost + (preview.travelCost || 0);
+    const totalCost = preview.projectedTotalCost || 0;
 
     fleetRolloutPreview.innerHTML = `
       <div class="fleet-rollout-head">
@@ -246,28 +261,37 @@ export function createFleetController({ state, dom, helpers, selectors, actions 
         </div>
         <div class="pill-row">
           <div class="metric-pill">Ships to change <strong>${formatNumber(preview.changedShipCount)}</strong></div>
-          <div class="metric-pill">Outfit cost <strong>${formatCredits(preview.purchaseCost)}</strong></div>
+          <div class="metric-pill">Buy total <strong>${formatCredits(preview.purchaseCost)}</strong></div>
+          ${preview.resaleCredit ? `<div class="metric-pill">Sell total <strong>${formatCredits(preview.resaleCredit)}</strong></div>` : ""}
           ${hasTravelCost ? `<div class="metric-pill">Travel cost <strong>${formatCredits(preview.travelCost)}</strong></div>` : ""}
-          <div class="metric-pill ${totalCost > 0 ? "" : ""}">Total cost <strong>${formatCredits(totalCost)}</strong></div>
+          <div class="metric-pill">Net total <strong>${formatCredits(totalCost)}</strong></div>
+          <div class="metric-pill">Final credits <strong>${formatCredits(preview.finalCredits || 0)}</strong></div>
           ${targetSummary ? `<div class="metric-pill">Target cargo <strong>${formatNumber(targetSummary.cargoSpace)}</strong></div>` : ""}
           ${targetSummary ? `<div class="metric-pill">Target jumps <strong>${formatNumber(targetSummary.jumpCount)}</strong></div>` : ""}
         </div>
       </div>
       ${draft.target.note ? `<div class="route-note">${escapeHtml(draft.target.note)}</div>` : ""}
       <div class="meta-row">
-        <span>Planet <strong>${escapeHtml(preview.currentPlanet?.name || "Not landed")}</strong></span>
-        <span>Outfitter <strong>${preview.currentPlanet?.hasOutfitter ? "Available" : "Missing"}</strong></span>
+        <span>System <strong>${escapeHtml(preview.currentSystemName || "Unknown")}</strong></span>
+        <span>Planet <strong>${escapeHtml(preview.currentPlanet?.name || "In space")}</strong></span>
+        <span>Outfitter <strong>${preview.currentPlanet?.hasOutfitter ? "Available" : "Not here"}</strong></span>
         <span>Credits <strong>${formatCredits(state.status?.player?.credits || 0)}</strong></span>
       </div>
+      ${preview.finalStop
+        ? `<div class="route-note">Changed ships will end at <strong>${escapeHtml(preview.finalStop.planet)}</strong> in ${escapeHtml(preview.finalStop.system)} after the rollout.</div>`
+        : ""
+      }
       ${hasTravelCost
         ? `<div class="fleet-rollout-travel-note">
             Ships selected for refit: ${formatNumber(preview.changedShipCount)} &nbsp;·&nbsp;
             Salary/day: ${formatCredits(preview.selectedSalaryPerDay)} &nbsp;·&nbsp;
             Navigator fee (10%): ${formatCredits(preview.navigatorFeePerDay)}/day &nbsp;·&nbsp;
-            Route: ${formatNumber(preview.routePlan?.totalJumps || 0)} jump${(preview.routePlan?.totalJumps || 0) !== 1 ? "s" : ""}
+            Route: ${formatNumber(preview.routePlan?.totalJumps || 0)} jump${(preview.routePlan?.totalJumps || 0) !== 1 ? "s" : ""} &nbsp;·&nbsp;
+            Travel/day: ${formatCredits(preview.travelCostPerJump || 0)}
           </div>`
         : ""
       }
+      <div class="route-note">${escapeHtml(preview.pricingNote || "")}</div>
       ${blockerMarkup}
       <section class="fleet-rollout-section">
         <div class="fleet-rollout-section-title">Outfit delta</div>
@@ -328,6 +352,11 @@ export function createFleetController({ state, dom, helpers, selectors, actions 
       currentPlanet,
       currentOutfitItems: currentPlanet?.outfitItems || [],
       currentCredits: Number(state.status?.player?.credits) || 0,
+      currentDate: state.status?.player?.date || null,
+      depreciation: state.status?.player?.depreciation || null,
+      planets: state.status?.wiki?.planets || [],
+      knownSystems: state.status?.player?.knownSystems || [],
+      standings: state.status?.player?.standings || [],
       getOutfitDefinition,
       findShortestPath: findShortestPath || (() => []),
     });
@@ -378,12 +407,14 @@ export function createFleetController({ state, dom, helpers, selectors, actions 
         name: entry.ship.name,
         originalName: entry.ship.name,
         outfits: draft.target.loadout,
+        system: !state.debugMode ? draft.preview.finalStop?.system : undefined,
+        planet: !state.debugMode ? draft.preview.finalStop?.planet : undefined,
       })),
     };
 
-    const totalCost = draft.preview.purchaseCost + (draft.preview.travelCost || 0);
-    if (!state.debugMode && totalCost > 0) {
-      payload.credits = Math.max(0, (Number(state.status?.player?.credits) || 0) - totalCost);
+    const totalCost = Number(draft.preview.projectedTotalCost) || 0;
+    if (!state.debugMode) {
+      payload.credits = Math.round((Number(state.status?.player?.credits) || 0) - totalCost);
     }
 
     const travelDays = draft.preview.routePlan?.totalJumps || 0;
@@ -455,6 +486,9 @@ export function createFleetController({ state, dom, helpers, selectors, actions 
             ? `${formatNumber(group.fitVariants)} fit variants detected`
             : "Uniform subgroup fit";
         const canApplyCurrentFit = state.fitShipName === group.model;
+        const rolloutHint = canApplyCurrentFit
+          ? `Current fitter draft is ready for ${group.label}.`
+          : `Open a ${group.model} fit in Fitter to roll out the current draft to this group.`;
         return `
           <article class="fleet-card fleet-group-card">
             <div class="ship-head">
@@ -482,6 +516,7 @@ export function createFleetController({ state, dom, helpers, selectors, actions 
               <button class="button-inline" data-normalize-group="${escapeHtml(group.key)}" type="button" ${group.outliers.length ? "" : "disabled"}>Normalize group</button>
               <button class="button-inline" data-apply-current-fit="${escapeHtml(group.key)}" type="button" ${canApplyCurrentFit ? "" : "disabled"}>Apply current fit</button>
             </div>
+            <div class="route-note ${canApplyCurrentFit ? "good" : "muted"}">${escapeHtml(rolloutHint)}</div>
           </article>
         `;
       })
